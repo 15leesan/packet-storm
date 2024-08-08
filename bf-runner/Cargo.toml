@@ -1,11 +1,9 @@
-[workspace]
-members = ["bf-runner"]
-
 [package]
-name = "packet-storm"
+name = "bf-runner"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 anyhow = "1.0.86"
 fs-err = "2.11.0"
+tap = "1.0.1"
