@@ -1,3 +1,5 @@
+use anyhow::anyhow;
+
 use crate::Instruction;
 
 pub mod num;
@@ -17,6 +19,18 @@ pub enum Item {
 }
 
 impl Item {
+    pub fn parse(s: &str) -> anyhow::Result<Self> {
+        Ok(Self::Sequence(
+            s.bytes()
+                .map(|b| {
+                    Instruction::from_byte(b)
+                        .map(Self::Direct)
+                        .ok_or_else(|| anyhow!("unknown byte 0x{b:02X}"))
+                })
+                .collect::<Result<_, _>>()?,
+        ))
+    }
+
     pub fn repeat(self, n: usize) -> Self {
         Self::Repeat { item: Box::new(self), n }
     }

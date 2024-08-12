@@ -98,6 +98,11 @@ fn read_u32_le() -> Item {
     ])
 }
 
+fn find_non_zero_cell_right() -> Item {
+    // "Find a non-zeroed cell" from https://esolangs.org/wiki/Brainfuck_algorithms
+    Item::parse("+[>[<-]<[->+<]>]>").expect("should be valid")
+}
+
 fn zero_check(offset: isize) -> Item {
     Item::Sequence(vec![
         Loop::new(vec![
@@ -318,6 +323,8 @@ impl Positions {
     const LIST_HEADSTOP: usize = Self::PACKET_IP_DEST + 1;
     const SECONDARY_IP_STORED_START: usize = Self::LIST_HEADSTOP + 2;
     const LIST_START: usize = Self::LIST_HEADSTOP + ListEntry::WIDTH;
+
+    const TRANSPORT_BYTES_OUTPUT_TERMINATE: usize = 34 + 4;
 }
 
 fn setup_state() -> Item {
@@ -598,8 +605,50 @@ fn append_to_list() -> Item {
     ])
 }
 
-fn output() -> Item {
-    Item::Sequence(vec![
+fn output() -> anyhow::Result<Item> {
+    #[derive(Debug)]
+    enum Text {
+        TransportLevelData,
+        BytesNewline,
+    }
+
+    fn write_text(text: Text) -> Item {
+        // Text output code generated with https://tnu.me/brainfuck/generator
+        let marker = format!("write text {text:?}");
+        let v = match text {
+            Text::TransportLevelData => {
+                vec![
+                    Item::parse(
+                        "++++++++[>+++++++++++>++++++++++++++>++++++++++++>++++>++++++>+++++++<<<<<<-]\
+        >----.>-.+++++.>+.<--------.>>.<<++++++++.--.>.<----.+++++.---.-.+++.++.>>>---.<<<--------.\
+        >++++.<++++++++++.>.+++++++.>.<--------.---.<--.>.>>>++.<<.",
+                    )
+                    .expect("should be valid")
+                    .comment("write \"Total transport-level data: \"", 220),
+                    Item::AssertRelativePosition(marker.clone(), 4, "after text write"),
+                    Instruction::Right.conv::<Item>().repeat(2),
+                    Loop::new(vec![zero_cell(), Instruction::Left.into()]).into(),
+                ]
+            }
+            Text::BytesNewline => {
+                vec![
+                    Item::parse("++++++++[>++++>++++++++++++>+++++++++++++++>+<<<<-]>.>++.>+.-----.<+++.>-.>++.")
+                        .expect("should be valid")
+                        .comment("write \" bytes\\n\"", 220),
+                    Item::AssertRelativePosition(marker.clone(), 4, "after text write"),
+                    Loop::new(vec![zero_cell(), Instruction::Left.into()]).into(),
+                ]
+            }
+        };
+        Item::Sequence(vec![
+            Item::AddMarker(marker.clone()),
+            Item::Sequence(v),
+            Item::AssertRelativePosition(marker.clone(), 0, "after text cleanup"),
+            Item::RemoveMarker(marker),
+        ])
+    }
+
+    Ok(Item::Sequence(vec![
         Item::AssertPosition(Positions::PACKET_LOOP_START, "after loop"),
         Item::Comment("begin output".into(), 240),
         offset_to_insns(offset_from(Positions::PACKET_LOOP_START, Positions::SCRATCH_SPACE - 1)),
@@ -630,15 +679,90 @@ fn output() -> Item {
         zero_cell(),
         offset_to_insns(offset_from(Positions::NO_PACKETS + 1, Positions::NO_UDP + 1)),
         zero_cell(),
-        offset_to_insns(offset_from(Positions::NO_UDP + 1, Positions::SCRATCH_SPACE)),
-        // TODO: Write "Total transport-level data: "
-        // TODO: Print `Positions::TRANSPORT_BYTES`
-        // TODO: Write " bytes\n"
+        offset_to_insns(offset_from(Positions::NO_UDP + 1, Positions::TRANSPORT_BYTES + 1)),
+        write_text(Text::TransportLevelData),
+        Item::AssertPosition(Positions::TRANSPORT_BYTES + 1, "after first output"),
+        offset_to_insns(offset_from(
+            Positions::TRANSPORT_BYTES + 1,
+            Positions::TRANSPORT_BYTES_OUTPUT_TERMINATE,
+        )),
+        Instruction::Right.into(),
+        Instruction::Inc.conv::<Item>().repeat(8),
+        Loop::new(vec![
+            Instruction::Dec.into(),
+            Instruction::Left.into(),
+            Instruction::Inc.conv::<Item>().repeat(6),
+            Instruction::Right.into(),
+        ])
+        .into(),
+        Instruction::Left.into(),
+        Loop::new(vec![
+            Instruction::Dec.into(),
+            Item::Sequence(vec![Instruction::Right.into(), Instruction::Inc.into()]).repeat(Positions::TRANSPORT_BYTES_WIDTH),
+            Instruction::Left.conv::<Item>().repeat(Positions::TRANSPORT_BYTES_WIDTH),
+        ])
+        .into(),
+        Item::AssertPosition(Positions::TRANSPORT_BYTES_OUTPUT_TERMINATE, "init output end"),
+        Instruction::Dec.into(),
+        offset_to_insns(offset_from(
+            Positions::TRANSPORT_BYTES_OUTPUT_TERMINATE,
+            Positions::TRANSPORT_BYTES,
+        )),
+        Item::Sequence(vec![
+            Loop::new(vec![
+                Instruction::Dec.into(),
+                offset_to_insns(Positions::TRANSPORT_BYTES_WIDTH as isize),
+                zero_cell(),
+                Instruction::Inc.into(),
+                offset_to_insns(Positions::TRANSPORT_BYTES_WIDTH as isize + 1),
+                Instruction::Inc.into(),
+                offset_to_insns(-(2 * Positions::TRANSPORT_BYTES_WIDTH as isize + 1)),
+            ])
+            .into(),
+            Instruction::Left.into(),
+        ])
+        .repeat(Positions::TRANSPORT_BYTES_WIDTH)
+        .comment("leading zeros filter", 120),
+        Item::AssertPosition(Positions::TRANSPORT_BYTES_START - 1, "after transport bytes leading zeros"),
+        find_non_zero_cell_right(),
+        Instruction::Left.into(),
+        Instruction::Inc.into(),
+        Loop::new(vec![
+            Instruction::Right.into(),
+            offset_to_insns(Positions::TRANSPORT_BYTES_WIDTH as isize + 1),
+            Instruction::Output.into(),
+            offset_to_insns(-(Positions::TRANSPORT_BYTES_WIDTH as isize + 1)),
+            Instruction::Inc.into(),
+        ])
+        .into(),
+        Item::Sequence(vec![Instruction::Left.into(), zero_cell()]).repeat(Positions::TRANSPORT_BYTES_WIDTH),
+        write_text(Text::BytesNewline),
+        find_non_zero_cell_right(),
+        Item::AssertPosition(Positions::TRANSPORT_BYTES_OUTPUT_TERMINATE + 1, "begin restore transport bytes"),
+        Instruction::Left.conv::<Item>().repeat(2),
+        Instruction::Inc.conv::<Item>().repeat(8),
+        Loop::new(vec![
+            Instruction::Dec.into(),
+            Instruction::Right.into(),
+            Instruction::Inc.conv::<Item>().repeat(6),
+            Instruction::Left.into(),
+        ])
+        .into(),
+        Instruction::Right.into(),
+        // TEMP: Leave like this to see what space is taken up
+        // Loop::new(vec![
+        //     Instruction::Dec.into(),
+        //     Item::Sequence(vec![Instruction::Right.into(), Instruction::Dec.into()]).repeat(Positions::TRANSPORT_BYTES_WIDTH),
+        //     Instruction::Left.conv::<Item>().repeat(Positions::TRANSPORT_BYTES_WIDTH),
+        // ])
+        // .into(),
+        // TODO: calculate & print average packet size
         // TODO: Print `Positions::NO_UDP`
         // TODO: Write " UDP, "
         // TODO: Print `total - Positions::NO_UDP`
         // TODO: Write " TCP\n"
-    ])
+        // TODO: output destination IP stats
+    ]))
 }
 
 fn main() -> anyhow::Result<()> {
@@ -647,13 +771,13 @@ fn main() -> anyhow::Result<()> {
         setup_state(),
         Item::AssertPosition(Positions::PACKET_LOOP_START, "start"),
         read_packet_loop(),
-        output(),
+        output()?,
     ];
 
     let program = Program::build(program.clone().build())?;
     println!("{}", program.as_text());
     let data = fs_err::read("test.pcap")?;
-    let input = Cursor::new(data[..1425].to_owned()); // Header + first 10 packets
+    let input = Cursor::new(data[..1781].to_owned()); // Header + first 13 packets
 
     let mut interpreter = Interpreter::new(program, input);
     interpreter.set_print_level(160);

@@ -252,14 +252,28 @@ pub enum Instruction {
 impl Instruction {
     fn as_char(self) -> char {
         match self {
-            Instruction::Left => '<',
-            Instruction::Right => '>',
-            Instruction::Inc => '+',
-            Instruction::Dec => '-',
-            Instruction::Input => ',',
-            Instruction::Output => '.',
-            Instruction::Start => '[',
-            Instruction::End => ']',
+            Self::Left => '<',
+            Self::Right => '>',
+            Self::Inc => '+',
+            Self::Dec => '-',
+            Self::Input => ',',
+            Self::Output => '.',
+            Self::Start => '[',
+            Self::End => ']',
+        }
+    }
+
+    fn from_byte(b: u8) -> Option<Self> {
+        match b {
+            b'<' => Some(Self::Left),
+            b'>' => Some(Self::Right),
+            b'+' => Some(Self::Inc),
+            b'-' => Some(Self::Dec),
+            b',' => Some(Self::Input),
+            b'.' => Some(Self::Output),
+            b'[' => Some(Self::Start),
+            b']' => Some(Self::End),
+            _ => None,
         }
     }
 }
