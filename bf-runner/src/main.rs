@@ -34,7 +34,7 @@ Assumptions (non-exclusive):
  */
 
 fn halt() -> Item {
-    Item::Sequence(vec![Item::PrintTape, Item::AssertPosition(usize::MAX, "halt")])
+    Item::AssertPosition(usize::MAX, "halt")
 }
 
 fn discard_inputs_while(offset: isize) -> Item {
