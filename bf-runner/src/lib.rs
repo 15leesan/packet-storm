@@ -96,6 +96,7 @@ impl Interpreter {
                         }
                     }
                 }
+                InterpreterAction::EndComment => {}
                 InterpreterAction::Indent(_) => {}
                 InterpreterAction::PrintTape => {
                     println!("{}", self.tape());
@@ -206,6 +207,9 @@ impl Program {
                     s.push_str(comment);
                     s.push('\n');
                     s.push_str(&indent_str);
+                }
+                InterpreterAction::EndComment => {
+                    s.push('\n');
                 }
                 InterpreterAction::Indent(inc) => {
                     if *inc {

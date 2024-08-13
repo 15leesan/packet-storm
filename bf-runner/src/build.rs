@@ -12,6 +12,7 @@ pub enum Item {
     Loop(Loop),
     Repeat { item: Box<Self>, n: usize },
     Comment(String, u8),
+    EndComment,
     PrintTape,
     AddMarker(String),
     RemoveMarker(String),
@@ -36,7 +37,7 @@ impl Item {
     }
 
     pub fn comment(self, comment: impl Into<String>, level: u8) -> Self {
-        Self::Sequence(vec![Self::Comment(comment.into(), level), self])
+        Self::Sequence(vec![Self::Comment(comment.into(), level), self, Self::EndComment])
     }
 }
 
@@ -101,6 +102,7 @@ pub enum InterpreterAction {
     Instruction(Instruction),
     AssertPosition(usize, &'static str),
     Comment(String, u8),
+    EndComment,
     Indent(bool),
     PrintTape,
     PlaceMarker(String),
@@ -150,6 +152,7 @@ impl Buildable for Item {
                 vec![InterpreterAction::AssertPosition(desired, why)]
             }
             Self::Comment(comment, level) => vec![InterpreterAction::Comment(comment, level)],
+            Self::EndComment => vec![InterpreterAction::EndComment],
             Self::PrintTape => vec![InterpreterAction::PrintTape],
             Self::AddMarker(name) => vec![InterpreterAction::PlaceMarker(name)],
             Self::RemoveMarker(name) => vec![InterpreterAction::RemoveMarker(name)],
