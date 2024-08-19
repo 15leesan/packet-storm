@@ -217,7 +217,7 @@ fn packet_loop_after_check() -> Item {
             Instruction::Inc.conv::<Item>().repeat(20),
             Loop::new(vec![
                 Instruction::Left.conv::<Item>().repeat(3),
-                operate::<ByteSub<u16>>(1),
+                operate::<ByteSub<2>>(1),
                 Instruction::Right.conv::<Item>().repeat(3),
                 Instruction::Dec.into(),
             ])
@@ -229,7 +229,7 @@ fn packet_loop_after_check() -> Item {
                 zero_cell(),
                 Instruction::Left.conv::<Item>().repeat(2),
                 Item::AssertPosition(Positions::PACKET_IP_TOTAL_LENGTH, "packet IP length sub"),
-                operate::<ByteSub<u16>>(1),
+                operate::<ByteSub<2>>(1),
                 Item::AssertPosition(Positions::PACKET_IP_TOTAL_LENGTH, "before transport bytes inc"),
                 offset_to_insns(offset_from(Positions::PACKET_IP_TOTAL_LENGTH, Positions::TRANSPORT_BYTES)),
                 operate::<DecimalAdd<{ Positions::TRANSPORT_BYTES_WIDTH }>>(offset_from(Positions::TRANSPORT_BYTES, Positions::SCRATCH_SPACE_START)),
@@ -323,8 +323,6 @@ impl Positions {
     const LIST_HEADSTOP: usize = Self::PACKET_IP_DEST + 1;
     const SECONDARY_IP_STORED_START: usize = Self::LIST_HEADSTOP + 2;
     const LIST_START: usize = Self::LIST_HEADSTOP + ListEntry::WIDTH;
-
-    const TRANSPORT_BYTES_OUTPUT_TERMINATE: usize = 34 + 4;
 }
 
 fn setup_state() -> Item {

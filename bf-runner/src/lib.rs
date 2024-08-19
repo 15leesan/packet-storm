@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{anyhow, bail};
 
-use crate::build::InterpreterAction;
+use crate::build::{InterpreterAction, Item};
 
 pub mod build;
 
@@ -115,6 +115,7 @@ impl Interpreter {
                     } else {
                         base - offset.unsigned_abs()
                     };
+                    let name = name.clone();
                     assert_eq!(
                         self.tape_pointer,
                         expected,
@@ -122,6 +123,7 @@ impl Interpreter {
                         self.tape()
                     )
                 }
+                InterpreterAction::Custom(ref custom) => custom.act(self.tape(), self.tape_pointer),
             }
             self.instruction_pointer += 1;
         }
@@ -225,7 +227,8 @@ impl Program {
                 | InterpreterAction::PrintTape
                 | InterpreterAction::AssertRelative(_, _, _)
                 | InterpreterAction::PlaceMarker(_)
-                | InterpreterAction::RemoveMarker(_) => {}
+                | InterpreterAction::RemoveMarker(_)
+                | InterpreterAction::Custom(_) => {}
             }
         }
 

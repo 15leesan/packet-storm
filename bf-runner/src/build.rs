@@ -1,3 +1,5 @@
+use std::fmt::{Debug, Formatter};
+
 use anyhow::anyhow;
 
 use crate::Instruction;
@@ -17,6 +19,7 @@ pub enum Item {
     AddMarker(String),
     RemoveMarker(String),
     AssertRelativePosition(String, isize, &'static str),
+    Custom(#[allow(private_interfaces)] Box<dyn CustomAction>),
 }
 
 impl Item {
@@ -38,6 +41,10 @@ impl Item {
 
     pub fn comment(self, comment: impl Into<String>, level: u8) -> Self {
         Self::Sequence(vec![Self::Comment(comment.into(), level), self, Self::EndComment])
+    }
+
+    pub fn custom(f: impl for<'a> Fn(super::Tape<'a>, usize) + 'static + Clone) -> Self {
+        Self::Custom(Box::new(f))
     }
 }
 
@@ -97,7 +104,7 @@ pub fn drain(offsets: &[isize], add: bool) -> Item {
     Loop::new(insns).into()
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum InterpreterAction {
     Instruction(Instruction),
     AssertPosition(usize, &'static str),
@@ -108,6 +115,35 @@ pub enum InterpreterAction {
     PlaceMarker(String),
     RemoveMarker(String),
     AssertRelative(String, isize, &'static str),
+    Custom(#[allow(private_interfaces)] Box<dyn CustomAction>),
+}
+
+pub(crate) trait CustomAction {
+    fn act(&self, tape: super::Tape<'_>, position: usize);
+
+    fn clone_box(&self) -> Box<dyn CustomAction>;
+}
+
+impl<T: for<'a> Fn(super::Tape<'a>, usize) + Clone + 'static> CustomAction for T {
+    fn act(&self, tape: super::Tape<'_>, position: usize) {
+        self(tape, position)
+    }
+
+    fn clone_box(&self) -> Box<dyn CustomAction> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn CustomAction> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
+}
+
+impl Debug for Box<dyn CustomAction> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("dyn CustomAction").finish_non_exhaustive()
+    }
 }
 
 impl InterpreterAction {
@@ -157,6 +193,7 @@ impl Buildable for Item {
             Self::AddMarker(name) => vec![InterpreterAction::PlaceMarker(name)],
             Self::RemoveMarker(name) => vec![InterpreterAction::RemoveMarker(name)],
             Self::AssertRelativePosition(name, offset, comment) => vec![InterpreterAction::AssertRelative(name, offset, comment)],
+            Self::Custom(custom) => vec![InterpreterAction::Custom(custom)],
         }
     }
 }

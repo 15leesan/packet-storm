@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use crate::{
     build::{offset_to_insns, zero_cell, Item, Loop},
     Instruction,
@@ -108,42 +106,36 @@ pub fn operate<N: NumericOperation>(scratch_offset: isize) -> Item {
     ])
 }
 
-pub struct ByteAdd<P>(PhantomData<P>);
-pub struct ByteSub<P>(PhantomData<P>);
+pub struct ByteAdd<const N: usize>;
+pub struct ByteSub<const N: usize>;
 
-macro_rules! impl_byte_numeric {
-    ($($t:ty[$w:literal]),+ $(,)?) => {
-        $(impl NumericOperation for ByteAdd<$t> {
-            const NAME: &'static str = concat!("add ", stringify!($t));
-            const ZERO_CHECK_FIRST: bool = false;
-            const WIDTH: usize = $w;
+impl<const N: usize> NumericOperation for ByteAdd<N> {
+    const NAME: &'static str = "add";
+    const ZERO_CHECK_FIRST: bool = false;
+    const WIDTH: usize = N;
 
-            fn operation() -> Item {
-                Instruction::Inc.into()
-            }
+    fn operation() -> Item {
+        Instruction::Inc.into()
+    }
 
-            fn zero_reset() -> Item {
-                Item::Sequence(vec![])
-            }
-        }
-
-        impl NumericOperation for ByteSub<$t> {
-            const NAME: &'static str = concat!("sub ", stringify!($t));
-            const ZERO_CHECK_FIRST: bool = true;
-            const WIDTH: usize = $w;
-
-            fn operation() -> Item {
-                Instruction::Dec.into()
-            }
-
-            fn zero_reset() -> Item {
-                Item::Sequence(vec![])
-            }
-        })+
-    };
+    fn zero_reset() -> Item {
+        Item::Sequence(vec![])
+    }
 }
 
-impl_byte_numeric! {u16[2], u32[4], u64[8]}
+impl<const N: usize> NumericOperation for ByteSub<N> {
+    const NAME: &'static str = "sub";
+    const ZERO_CHECK_FIRST: bool = true;
+    const WIDTH: usize = N;
+
+    fn operation() -> Item {
+        Instruction::Dec.into()
+    }
+
+    fn zero_reset() -> Item {
+        Item::Sequence(vec![])
+    }
+}
 
 pub struct DecimalAdd<const N: usize>;
 
@@ -158,5 +150,21 @@ impl<const N: usize> NumericOperation for DecimalAdd<N> {
 
     fn zero_reset() -> Item {
         Item::Sequence(vec![Instruction::Dec.into(); 10])
+    }
+}
+
+pub struct DecimalSub<const N: usize>;
+
+impl<const N: usize> NumericOperation for DecimalSub<N> {
+    const NAME: &'static str = "decimal sub";
+    const ZERO_CHECK_FIRST: bool = true;
+    const WIDTH: usize = N;
+
+    fn operation() -> Item {
+        Instruction::Dec.into()
+    }
+
+    fn zero_reset() -> Item {
+        Item::Sequence(vec![Instruction::Inc.into(); 10])
     }
 }
