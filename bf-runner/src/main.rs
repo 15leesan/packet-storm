@@ -3,7 +3,7 @@ use std::io::Cursor;
 use bf_runner::{
     build::{
         drain,
-        num::{operate, ByteSub, DecimalAdd},
+        num::{operate, ByteSub, DecimalAdd, DecimalSub},
         offset_from, offset_to_insns, zero_cell, zero_cell_up, Buildable, Item, Loop,
     },
     Instruction, Interpreter, Program,
@@ -258,7 +258,8 @@ fn packet_loop_after_check() -> Item {
         Item::repeat(Instruction::Input.into(), 2),
         Item::repeat(Instruction::Input.into(), 4), // Discard source addr
         // Read 2*4 - dest addr
-        Item::AssertPosition(Positions::PACKET_IP_DEST_START, "packet ip dest start"),
+        Item::AssertPosition(Positions::PACKET_IP_DEST_START - 10, "before IP"),
+        offset_to_insns(10),
         read_u32(),
         Item::AssertPosition(Positions::PACKET_IP_DEST, "packet ip dest"),
         offset_to_insns(offset_from(Positions::PACKET_IP_DEST, Positions::PACKET_IP_DEST_START)),
@@ -317,7 +318,7 @@ impl Positions {
     const PACKET_IP_PROTOCOL: usize = Self::PACKET_IP_TOTAL_LENGTH_SCRATCH + 3;
 
     // As protocol is overwritten
-    const PACKET_IP_DEST_START: usize = Self::PACKET_IP_PROTOCOL;
+    const PACKET_IP_DEST_START: usize = Self::PACKET_IP_PROTOCOL + 10; // 10-space required for division space
     const PACKET_IP_DEST: usize = Self::PACKET_IP_DEST_START + 3;
 
     const LIST_HEADSTOP: usize = Self::PACKET_IP_DEST + 1;
@@ -603,11 +604,110 @@ fn append_to_list() -> Item {
     ])
 }
 
+// TEMP: move into `output()`
+
+// Positioned on the first cell of the number
+// Cannot be called on cell 0
+// TODO: It outputs a trailing null byte that it shouldn't
+fn display_decimal(width: usize, extra_gap: usize) -> Item {
+    let mark = "display start".to_owned();
+    Item::Sequence(vec![
+        Item::AddMarker(mark.clone()),
+        offset_to_insns(2 * width as isize + extra_gap as isize),
+        Instruction::Right.into(),
+        Instruction::Inc.conv::<Item>().repeat(8),
+        Loop::new(vec![
+            Instruction::Dec.into(),
+            Instruction::Left.into(),
+            Instruction::Inc.conv::<Item>().repeat(6),
+            Instruction::Right.into(),
+        ])
+        .into(),
+        Instruction::Left.into(),
+        Loop::new(vec![
+            Instruction::Dec.into(),
+            Item::Sequence(vec![Instruction::Right.into(), Instruction::Inc.into()]).repeat(width),
+            Instruction::Left.conv::<Item>().repeat(width),
+        ])
+        .into(),
+        Item::AssertRelativePosition(mark.clone(), 2 * width as isize + extra_gap as isize, "init output end"),
+        offset_to_insns(offset_from(2 * width + extra_gap, 2 * width)),
+        Instruction::Dec.into(),
+        offset_to_insns(offset_from(2 * width, width - 1)),
+        Item::Sequence(vec![
+            Loop::new(vec![
+                Instruction::Dec.into(),
+                offset_to_insns(width as isize),
+                zero_cell(),
+                Instruction::Inc.into(),
+                offset_to_insns(width as isize + 1 + extra_gap as isize),
+                Instruction::Inc.into(),
+                offset_to_insns(-(2 * width as isize + 1 + extra_gap as isize)),
+            ])
+            .into(),
+            Instruction::Left.into(),
+        ])
+        .repeat(width)
+        .comment("leading zeros filter", 120),
+        Item::AssertRelativePosition(mark.clone(), -1, "after transport bytes leading zeros"),
+        find_non_zero_cell_right(),
+        Instruction::Left.into(),
+        Instruction::Inc.into(),
+        Loop::new(vec![
+            Instruction::Right.into(),
+            offset_to_insns(width as isize + 1 + extra_gap as isize),
+            Instruction::Output.into(),
+            offset_to_insns(-(width as isize + 1 + extra_gap as isize)),
+            Instruction::Inc.into(),
+        ])
+        .into(),
+        Item::Sequence(vec![
+            Item::Sequence(vec![Instruction::Left.into(), zero_cell()]).repeat(width + 1),
+            find_non_zero_cell_right(),
+            Item::AssertRelativePosition(
+                mark.clone(),
+                2 * width as isize + 1 + extra_gap as isize,
+                "begin restore transport bytes",
+            ),
+            Instruction::Left.conv::<Item>().repeat(2),
+            Instruction::Inc.conv::<Item>().repeat(8),
+            Loop::new(vec![
+                Instruction::Dec.into(),
+                Instruction::Right.into(),
+                Instruction::Inc.conv::<Item>().repeat(6),
+                Instruction::Left.into(),
+            ])
+            .into(),
+            Instruction::Right.into(),
+            Loop::new(vec![
+                Instruction::Dec.into(),
+                Item::Sequence(vec![Instruction::Right.into(), Instruction::Dec.into()]).repeat(width),
+                Instruction::Left.conv::<Item>().repeat(width),
+            ])
+            .into(),
+            // Item::Sequence(vec![
+            //     Instruction::Right.into(),
+            //     Instruction::Inc.into(),
+            //     Instruction::Left.into(),
+            // ])
+            // .comment("TEMP: only for vis", 250),
+            Instruction::Left.conv::<Item>().repeat(2 * width + extra_gap),
+        ])
+        .comment("decimal cleanup", 120),
+        Item::AssertRelativePosition(mark.clone(), 0, "decimal reset"),
+        Item::RemoveMarker(mark),
+    ])
+    .comment(format!("display decimal {{width={width}}}"), 180)
+}
+
 fn output() -> anyhow::Result<Item> {
     #[derive(Debug)]
     enum Text {
         TransportLevelData,
         BytesNewline,
+        UDP,
+        TCPNewline,
+        BytesPerPacket,
     }
 
     fn write_text(text: Text) -> Item {
@@ -634,6 +734,37 @@ fn output() -> anyhow::Result<Item> {
                         .expect("should be valid")
                         .comment("write \" bytes\\n\"", 220),
                     Item::AssertRelativePosition(marker.clone(), 4, "after text write"),
+                    Loop::new(vec![zero_cell(), Instruction::Left.into()]).into(),
+                ]
+            }
+            Text::UDP => {
+                vec![
+                    Item::parse("+++++++[>+++++>++++++++++++>++++++++++>++++++<<<<-]>---.>+.>--.<-----.>>++.<<<.")
+                        .expect("should be valid")
+                        .comment("write \" UDP, \"", 220),
+                    Item::AssertRelativePosition(marker.clone(), 1, "after text write"),
+                    Loop::new(vec![zero_cell(), Instruction::Right.into()]).into(),
+                    offset_to_insns(-5),
+                ]
+            }
+            Text::TCPNewline => {
+                vec![
+                    Item::parse("+++++++[>+++++>++++++++++++>++++++++++>+<<<<-]>---.>.>---.<----.>>+++.")
+                        .expect("should be valid")
+                        .comment("write \" TCP\\n\"", 220),
+                    Item::AssertRelativePosition(marker.clone(), 4, "after text write"),
+                    Loop::new(vec![zero_cell(), Instruction::Left.into()]).into(),
+                ]
+            }
+            Text::BytesPerPacket => {
+                vec![
+                    Item::parse(
+                        "+++++++[>+++++>++++++++++++++>+++++++++++++++++>+++++++>+<<<<<-]>---.>.>\
+                    ++.-----.<+++.>-.>--.<---.<----.++.>-----.<++.>+++++++++.>>+++.",
+                    )
+                    .expect("should be valid")
+                    .comment("write \" bytes/packet\\n\"", 220),
+                    Item::AssertRelativePosition(marker.clone(), 5, "after text write"),
                     Loop::new(vec![zero_cell(), Instruction::Left.into()]).into(),
                 ]
             }
@@ -680,87 +811,250 @@ fn output() -> anyhow::Result<Item> {
         offset_to_insns(offset_from(Positions::NO_UDP + 1, Positions::TRANSPORT_BYTES + 1)),
         write_text(Text::TransportLevelData),
         Item::AssertPosition(Positions::TRANSPORT_BYTES + 1, "after first output"),
-        offset_to_insns(offset_from(
-            Positions::TRANSPORT_BYTES + 1,
-            Positions::TRANSPORT_BYTES_OUTPUT_TERMINATE,
-        )),
-        Instruction::Right.into(),
-        Instruction::Inc.conv::<Item>().repeat(8),
-        Loop::new(vec![
-            Instruction::Dec.into(),
-            Instruction::Left.into(),
-            Instruction::Inc.conv::<Item>().repeat(6),
+        offset_to_insns(offset_from(Positions::TRANSPORT_BYTES + 1, Positions::TRANSPORT_BYTES_START)),
+        display_decimal(Positions::TRANSPORT_BYTES_WIDTH, 0),
+        write_text(Text::BytesNewline),
+        offset_to_insns(offset_from(Positions::TRANSPORT_BYTES_START, Positions::NO_UDP_START)),
+        display_decimal(Positions::NO_UDP_WIDTH, 0),
+        write_text(Text::UDP),
+        offset_to_insns(offset_from(Positions::NO_UDP_START, Positions::NO_PACKETS_START)),
+        Item::Sequence(vec![
+            drain(&[-4, 4 + Positions::NO_PACKETS_WIDTH as isize], true),
             Instruction::Right.into(),
         ])
-        .into(),
-        Instruction::Left.into(),
+        .repeat(Positions::NO_PACKETS_WIDTH),
+        offset_to_insns(Positions::NO_PACKETS_WIDTH as isize),
+        Item::Sequence(vec![Instruction::Right.into(), Instruction::Inc.into()]).repeat(Positions::NO_PACKETS_WIDTH),
         Loop::new(vec![
             Instruction::Dec.into(),
-            Item::Sequence(vec![Instruction::Right.into(), Instruction::Inc.into()]).repeat(Positions::TRANSPORT_BYTES_WIDTH),
-            Instruction::Left.conv::<Item>().repeat(Positions::TRANSPORT_BYTES_WIDTH),
+            offset_to_insns(1 + Positions::NO_PACKETS_WIDTH as isize),
+            Loop::new(vec![
+                offset_to_insns(-2 + -2 * (Positions::NO_PACKETS_WIDTH as isize)),
+                operate::<DecimalSub<{ Positions::NO_PACKETS_WIDTH }>>(8),
+                offset_to_insns(2 + 2 * (Positions::NO_PACKETS_WIDTH as isize)),
+                Instruction::Dec.into(),
+            ])
+            .indent()
+            .conv::<Item>()
+            .comment("subtraction level", 140),
+            offset_to_insns(-1 - Positions::NO_PACKETS_WIDTH as isize),
+            Instruction::Left.into(),
         ])
-        .into(),
-        Item::AssertPosition(Positions::TRANSPORT_BYTES_OUTPUT_TERMINATE, "init output end"),
-        Instruction::Dec.into(),
-        offset_to_insns(offset_from(
-            Positions::TRANSPORT_BYTES_OUTPUT_TERMINATE,
-            Positions::TRANSPORT_BYTES,
-        )),
+        .indent()
+        .conv::<Item>()
+        .comment("subtract UDP from total packets", 200),
+        offset_to_insns(-7),
+        Item::AssertPosition(11, "TCP packets"),
+        display_decimal(Positions::NO_PACKETS_WIDTH, 0),
+        write_text(Text::TCPNewline),
+        Item::AssertPosition(11, "before clear subtraction"),
+        offset_to_insns(14),
+        Item::Sequence(vec![Instruction::Right.into(), zero_cell()]).repeat(Positions::NO_PACKETS_WIDTH),
+        Item::AssertPosition(32, "after clear subtraction"),
+        // TODO: Write text on line before division
+        // Prepare division
+        offset_to_insns(offset_from(32, 6)),
+        Item::Sequence(vec![Instruction::Right.into(), zero_cell()]).repeat(48 - 7 - 9),
+        Item::AssertPosition(38, "after clear for division"),
+        offset_to_insns(offset_from(38, 19)),
+        Item::AddMarker("divide D".to_owned()),
+        Item::Sequence(vec![zero_cell(), Instruction::Left.into()]).repeat(Positions::NO_PACKETS_WIDTH),
+        Item::AssertPosition(19 - Positions::NO_PACKETS_WIDTH, "after zero 1 for division"),
+        offset_to_insns(offset_from(19 - Positions::NO_PACKETS_WIDTH, 0)),
+        Item::Sequence(vec![
+            drain(&[offset_from(0, 19 - Positions::NO_PACKETS_WIDTH + 1)], true),
+            Instruction::Right.into(),
+        ])
+        .repeat(Positions::NO_PACKETS_WIDTH),
+        Item::AssertPosition(7, "after move divisor for division"),
+        offset_to_insns(offset_from(7, 48)),
+        Item::Sequence(vec![drain(&[offset_from(47, 11)], true), Instruction::Left.into()]).repeat(Positions::TRANSPORT_BYTES_WIDTH),
+        Item::AssertPosition(48 - Positions::TRANSPORT_BYTES_WIDTH, "after move dividend for division"),
+        offset_to_insns(offset_from(48 - Positions::TRANSPORT_BYTES_WIDTH, 11)),
+        Item::AddMarker("divide N".to_owned()),
+        offset_to_insns(offset_from(11, 0)),
+        divide(),
+        Item::AssertPosition(0, "after division"),
+        write_text(Text::BytesPerPacket),
+        // This isn't efficient - most of the cells are *already* guaranteed to be 0, but at this point
+        // I'm not going to spend time figuring out which specific cells need zeroing.
+        Item::Sequence(vec![zero_cell(), Instruction::Right.into()]).repeat(Positions::LIST_START),
+        Item::AssertPosition(Positions::LIST_START, "division cleanup done"),
+        // TODO: output destination IP stats
+    ]))
+}
+
+fn divide() -> Item {
+    fn new_zero_check(temp_copy: isize, accumulator: isize) -> Item {
         Item::Sequence(vec![
             Loop::new(vec![
                 Instruction::Dec.into(),
-                offset_to_insns(Positions::TRANSPORT_BYTES_WIDTH as isize),
-                zero_cell(),
+                offset_to_insns(temp_copy),
                 Instruction::Inc.into(),
-                offset_to_insns(Positions::TRANSPORT_BYTES_WIDTH as isize + 1),
+                offset_to_insns(-temp_copy),
+                offset_to_insns(accumulator),
                 Instruction::Inc.into(),
-                offset_to_insns(-(2 * Positions::TRANSPORT_BYTES_WIDTH as isize + 1)),
+                offset_to_insns(-accumulator),
             ])
             .into(),
-            Instruction::Left.into(),
+            offset_to_insns(temp_copy),
+            drain(&[-temp_copy], true),
+            offset_to_insns(-temp_copy),
         ])
-        .repeat(Positions::TRANSPORT_BYTES_WIDTH)
-        .comment("leading zeros filter", 120),
-        Item::AssertPosition(Positions::TRANSPORT_BYTES_START - 1, "after transport bytes leading zeros"),
-        find_non_zero_cell_right(),
-        Instruction::Left.into(),
-        Instruction::Inc.into(),
-        Loop::new(vec![
-            Instruction::Right.into(),
-            offset_to_insns(Positions::TRANSPORT_BYTES_WIDTH as isize + 1),
-            Instruction::Output.into(),
-            offset_to_insns(-(Positions::TRANSPORT_BYTES_WIDTH as isize + 1)),
-            Instruction::Inc.into(),
+    }
+
+    // On the last cell of the number
+    fn zero_check_number(width: usize, temp_copy: isize, accumulator: isize) -> Item {
+        let s = (0..width)
+            .flat_map(|i| [new_zero_check(temp_copy + i as isize, accumulator + i as isize), Instruction::Left.into()])
+            .collect();
+
+        Item::Sequence(vec![
+            offset_to_insns(accumulator),
+            zero_cell(),
+            offset_to_insns(-accumulator),
+            Item::Sequence(s),
+            offset_to_insns(width as _),
         ])
-        .into(),
-        Item::Sequence(vec![Instruction::Left.into(), zero_cell()]).repeat(Positions::TRANSPORT_BYTES_WIDTH),
-        write_text(Text::BytesNewline),
-        find_non_zero_cell_right(),
-        Item::AssertPosition(Positions::TRANSPORT_BYTES_OUTPUT_TERMINATE + 1, "begin restore transport bytes"),
-        Instruction::Left.conv::<Item>().repeat(2),
-        Instruction::Inc.conv::<Item>().repeat(8),
+        .comment(format!("zero check number {{width={width}}}"), 180)
+    }
+
+    const ZC: usize = 0;
+    const SC: usize = 1;
+
+    /*
+    N - number (decimal)
+    D - divisor (bytes) TODO: Should be decimal
+    T - temporary storage (bytes)
+    Q - quotient (decimal)
+     */
+
+    println!("D = {D}");
+
+    const NW: usize = Positions::TRANSPORT_BYTES_WIDTH;
+    const N: usize = SC + 2 + NW - 1; // = 11
+    const N0: usize = N + 1;
+
+    const DW: usize = Positions::NO_PACKETS_WIDTH;
+    const D: usize = N0 + DW; // = 19
+    const D0: usize = D + 1;
+
+    const TW: usize = DW;
+    const T: usize = D0 + TW;
+    const T0: usize = T + 1;
+
+    const QW: usize = NW;
+    const Q: usize = T0 + QW;
+    const Q0: usize = Q + 1;
+
+    Item::Sequence(vec![
+        Item::AssertPosition(0, "before division"),
+        offset_to_insns(offset_from(0, N)),
+        Item::AssertRelativePosition("divide N".to_owned(), 0, "N correctly positioned"),
+        offset_to_insns(offset_from(N, D)),
+        Item::AssertRelativePosition("divide D".to_owned(), 0, "D correctly positioned"),
+        offset_to_insns(offset_from(D, 0)),
+        offset_to_insns(offset_from(0, T0)),
+        Instruction::Inc.conv::<Item>().repeat(10),
         Loop::new(vec![
             Instruction::Dec.into(),
-            Instruction::Right.into(),
-            Instruction::Inc.conv::<Item>().repeat(6),
-            Instruction::Left.into(),
+            Item::Sequence(vec![Instruction::Left.into(), Instruction::Dec.into()]).repeat(TW),
+            Instruction::Right.conv::<Item>().repeat(TW),
         ])
         .into(),
-        Instruction::Right.into(),
-        // TEMP: Leave like this to see what space is taken up
-        // Loop::new(vec![
-        //     Instruction::Dec.into(),
-        //     Item::Sequence(vec![Instruction::Right.into(), Instruction::Dec.into()]).repeat(Positions::TRANSPORT_BYTES_WIDTH),
-        //     Instruction::Left.conv::<Item>().repeat(Positions::TRANSPORT_BYTES_WIDTH),
-        // ])
-        // .into(),
-        // TODO: calculate & print average packet size
-        // TODO: Print `Positions::NO_UDP`
-        // TODO: Write " UDP, "
-        // TODO: Print `total - Positions::NO_UDP`
-        // TODO: Write " TCP\n"
-        // TODO: output destination IP stats
-    ]))
+        Item::AssertPosition(T0, "after init"),
+        offset_to_insns(offset_from(T0, 0)),
+        offset_to_insns(offset_from(0, Q0)),
+        Instruction::Inc.conv::<Item>().repeat(10),
+        Loop::new(vec![
+            Instruction::Dec.into(),
+            Item::Sequence(vec![Instruction::Left.into(), Instruction::Dec.into()]).repeat(QW),
+            offset_to_insns(QW as _),
+        ])
+        .into(),
+        Item::AssertPosition(Q0, "Q setup"),
+        offset_to_insns(offset_from(Q0, 0)),
+        // Setup complete, at cell 0
+        offset_to_insns(offset_from(0, N)),
+        zero_check_number(NW, offset_from(N, SC), offset_from(N, ZC)),
+        Item::AssertPosition(N, "still here"),
+        offset_to_insns(offset_from(N, ZC)),
+        Loop::new(vec![
+            zero_cell(),
+            offset_to_insns(offset_from(ZC, N)),
+            operate::<DecimalSub<NW>>(offset_from(N, ZC)),
+            Item::AssertPosition(N, "after N subtract"),
+            offset_to_insns(offset_from(N, ZC)),
+            zero_cell(),
+            offset_to_insns(offset_from(ZC, D)),
+            operate::<DecimalSub<DW>>(offset_from(D, ZC)),
+            Item::AssertPosition(D, "after D subtract"),
+            zero_check_number(DW, offset_from(D, SC), offset_from(D, ZC)),
+            offset_to_insns(offset_from(D, ZC)),
+            drain(&[offset_from(ZC, N0)], true),
+            offset_to_insns(offset_from(ZC, T)),
+            operate::<DecimalAdd<TW>>(offset_from(T, ZC)),
+            Item::AssertPosition(T, "after T add"),
+            offset_to_insns(offset_from(T, N0)),
+            drain(&[offset_from(N0, ZC)], true),
+            offset_to_insns(offset_from(N0, ZC)),
+            Instruction::Right.into(),
+            zero_cell(),
+            Instruction::Inc.into(),
+            Instruction::Left.into(),
+            // If nonzero (i.e. d != 0)
+            Loop::new(vec![
+                zero_cell(),
+                Instruction::Right.into(),
+                zero_cell(),
+                Instruction::Left.into(),
+            ])
+            .into(),
+            Instruction::Right.into(),
+            Item::AssertPosition(ZC + 1, "before else"),
+            // Else (i.e. d == 0)
+            Loop::new(vec![
+                zero_cell(),
+                offset_to_insns(offset_from(ZC + 1, T)),
+                Item::Sequence(vec![drain(&[offset_from(T, D)], true), Instruction::Left.into()]).repeat(TW),
+                Item::AssertPosition(D + 1, "after restore D"),
+                offset_to_insns(offset_from(D + 1, T0)),
+                Instruction::Inc.conv::<Item>().repeat(10),
+                Loop::new(vec![
+                    Instruction::Dec.into(),
+                    Item::Sequence(vec![Instruction::Left.into(), Instruction::Dec.into()]).repeat(TW),
+                    Instruction::Left.into(),
+                    Item::Sequence(vec![Instruction::Left.into(), Instruction::Inc.into()]).repeat(DW),
+                    Instruction::Right.conv::<Item>().repeat(TW + DW + 1),
+                ])
+                .into(),
+                Item::AssertPosition(T0, "after unreset T+D"),
+                offset_to_insns(offset_from(T0, Q)),
+                operate::<DecimalAdd<QW>>(offset_from(Q, ZC)),
+                Item::AssertPosition(Q, "after increment Q"),
+                offset_to_insns(offset_from(Q, ZC + 1)),
+            ])
+            .into(),
+            offset_to_insns(offset_from(ZC + 1, N)),
+            zero_check_number(NW, offset_from(N, SC), offset_from(N, ZC)),
+            Item::AssertPosition(N, "before loop"),
+            offset_to_insns(offset_from(N, ZC)),
+        ])
+        .into(),
+        offset_to_insns(offset_from(ZC, Q0)),
+        Instruction::Inc.conv::<Item>().repeat(10),
+        Loop::new(vec![
+            Instruction::Dec.into(),
+            Item::Sequence(vec![Instruction::Left.into(), Instruction::Inc.into()]).repeat(QW),
+            offset_to_insns(QW as _),
+        ])
+        .into(),
+        Item::AssertPosition(Q0, "Q desetup"),
+        offset_to_insns(-(QW as isize)),
+        display_decimal(QW, 0),
+        Item::AssertPosition(Q - QW + 1, "after division"),
+        offset_to_insns(offset_from(Q - QW + 1, 0)),
+    ])
 }
 
 fn main() -> anyhow::Result<()> {
