@@ -3,11 +3,12 @@ use std::{
     fmt::{Debug, Display, Formatter},
     io::{Read, Write},
     ops::Deref,
+    panic::Location,
 };
 
 use anyhow::{anyhow, bail};
 
-use crate::build::{InterpreterAction, Item};
+use crate::build::InterpreterAction;
 
 pub mod build;
 
@@ -18,7 +19,7 @@ pub struct Interpreter {
     tape_pointer: usize,
     tape: Vec<u8>,
     printing_level: Option<u8>,
-    markers: HashMap<String, usize>,
+    markers: HashMap<String, Marker>,
 }
 
 impl Interpreter {
@@ -95,29 +96,15 @@ impl Interpreter {
                 }
                 InterpreterAction::EndComment => {}
                 InterpreterAction::Indent(_) => {}
-                InterpreterAction::PlaceMarker(ref name) => {
-                    let old = self.markers.insert(name.clone(), self.tape_pointer);
-                    assert!(old.is_none(), "marker {name:?} already exists")
-                }
-                InterpreterAction::RemoveMarker(ref name) => {
-                    self.markers.remove(name).expect("marker does not exist");
-                }
-                InterpreterAction::AssertRelative(ref name, offset, comment) => {
-                    let base = *self.markers.get(name).expect("marker does not exist");
-                    let expected = if offset >= 0 {
-                        base + offset as usize
-                    } else {
-                        base - offset.unsigned_abs()
+                InterpreterAction::Custom(ref custom) => {
+                    // borrowck complains because `self.tape()` *could* borrow `self.markers` so we need
+                    // to inline `Tape`'s construction
+                    let tape = Tape {
+                        at: self.tape_pointer,
+                        tape: &self.tape,
                     };
-                    let name = name.clone();
-                    assert_eq!(
-                        self.tape_pointer,
-                        expected,
-                        "missed {name:?}@{offset} - {comment}\n{}\n",
-                        self.tape()
-                    )
+                    custom.act(tape, self.tape_pointer, &mut self.markers)
                 }
-                InterpreterAction::Custom(ref custom) => custom.act(self.tape(), self.tape_pointer),
             }
             self.instruction_pointer += 1;
         }
@@ -223,10 +210,7 @@ impl Program {
                     s.push('\n');
                     s.push_str(&indent_str);
                 }
-                InterpreterAction::AssertRelative(_, _, _)
-                | InterpreterAction::PlaceMarker(_)
-                | InterpreterAction::RemoveMarker(_)
-                | InterpreterAction::Custom(_) => {}
+                InterpreterAction::Custom(_) => {}
             }
         }
 
@@ -280,5 +264,21 @@ impl Instruction {
             b']' => Some(Self::End),
             _ => None,
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct Marker {
+    at: usize,
+    created: &'static Location<'static>,
+}
+
+impl Marker {
+    pub fn at(&self) -> usize {
+        self.at
+    }
+
+    pub fn creation_location(&self) -> &'static Location {
+        self.created
     }
 }

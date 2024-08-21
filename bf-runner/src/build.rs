@@ -1,8 +1,12 @@
-use std::fmt::{Debug, Formatter};
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Formatter},
+    panic::Location,
+};
 
 use anyhow::anyhow;
 
-use crate::Instruction;
+use crate::{Instruction, Marker};
 
 pub mod num;
 
@@ -14,9 +18,6 @@ pub enum Item {
     Repeat { item: Box<Self>, n: usize },
     Comment(String, u8),
     EndComment,
-    AddMarker(String),
-    RemoveMarker(String),
-    AssertRelativePosition(String, isize, &'static str),
     Custom(#[allow(private_interfaces)] Box<dyn CustomAction>),
 }
 
@@ -33,6 +34,12 @@ impl Item {
         ))
     }
 
+    pub fn run(self, tape: super::Tape<'_>, position: usize, markers: &mut HashMap<String, Marker>) {
+        if let Self::Custom(action) = self {
+            action.act(tape, position, markers)
+        }
+    }
+
     pub fn repeat(self, n: usize) -> Self {
         Self::Repeat { item: Box::new(self), n }
     }
@@ -41,8 +48,82 @@ impl Item {
         Self::Sequence(vec![Self::Comment(comment.into(), level), self, Self::EndComment])
     }
 
-    pub fn custom(f: impl for<'a> Fn(super::Tape<'a>, usize) + 'static + Clone) -> Self {
+    pub fn custom(f: impl for<'a> Fn(super::Tape<'a>, usize, &mut HashMap<String, Marker>) + 'static + Clone) -> Self {
         Self::Custom(Box::new(f))
+    }
+
+    #[track_caller]
+    pub fn add_marker(name: impl Into<String>) -> Self {
+        let caller = Location::caller();
+        let name = name.into();
+        Self::custom(move |_, position, markers| {
+            let marker = Marker {
+                at: position,
+                created: caller,
+            };
+            let old = markers.insert(name.clone(), marker);
+            assert!(old.is_none(), "marker {name:?} already exists")
+        })
+    }
+
+    #[track_caller]
+    pub fn assert_marker_offset(name: impl Into<String>, offset: isize, comment: impl Into<String>) -> Self {
+        let caller = Location::caller();
+        let name = name.into();
+        let comment = comment.into();
+        Self::custom(move |tape, position, markers| {
+            let marker = markers.get(&name).expect("marker does not exist");
+            let base = marker.at;
+            let expected = if offset >= 0 {
+                base + offset as usize
+            } else {
+                base - offset.unsigned_abs()
+            };
+            if position != expected {
+                println!("mismatched marker, offset {offset}");
+                println!("[{}] placed marker {name:?} at {}", marker.created, marker.at);
+                println!("expected: {expected}");
+                println!("found   : {position}");
+                println!("source  : {comment}");
+                println!("[{caller}] misplaced");
+                println!("{tape}");
+                std::process::exit(1);
+            }
+        })
+    }
+
+    #[track_caller]
+    pub fn remove_marker(name: impl Into<String>) -> Self {
+        let name = name.into();
+        Self::custom(move |_, _, markers| {
+            markers.remove(&name).expect("marker does not exist");
+        })
+    }
+
+    #[track_caller]
+    pub fn halt() -> Item {
+        let caller = Location::caller();
+        Item::custom(move |tape, _, _| {
+            println!("[{caller}] - explicit halt");
+            println!("{tape}");
+            std::process::exit(1)
+        })
+    }
+
+    #[track_caller]
+    pub fn assert_position(cell: usize, message: impl Into<String>) -> Item {
+        let caller = Location::caller();
+        let message = message.into();
+        Item::custom(move |tape, pointer, _| {
+            if pointer != cell {
+                println!("[{caller}] - mismatched positions");
+                println!("expected: {cell}");
+                println!("actual  : {pointer}");
+                println!("source  : {message}");
+                println!("{tape}");
+                std::process::exit(1)
+            }
+        })
     }
 }
 
@@ -108,21 +189,18 @@ pub enum InterpreterAction {
     Comment(String, u8),
     EndComment,
     Indent(bool),
-    PlaceMarker(String),
-    RemoveMarker(String),
-    AssertRelative(String, isize, &'static str),
     Custom(#[allow(private_interfaces)] Box<dyn CustomAction>),
 }
 
 pub(crate) trait CustomAction {
-    fn act(&self, tape: super::Tape<'_>, position: usize);
+    fn act(&self, tape: super::Tape<'_>, position: usize, markers: &mut HashMap<String, Marker>);
 
     fn clone_box(&self) -> Box<dyn CustomAction>;
 }
 
-impl<T: for<'a> Fn(super::Tape<'a>, usize) + Clone + 'static> CustomAction for T {
-    fn act(&self, tape: super::Tape<'_>, position: usize) {
-        self(tape, position)
+impl<T: for<'a> Fn(super::Tape<'a>, usize, &mut HashMap<String, Marker>) + Clone + 'static> CustomAction for T {
+    fn act(&self, tape: super::Tape<'_>, position: usize, markers: &mut HashMap<String, Marker>) {
+        self(tape, position, markers)
     }
 
     fn clone_box(&self) -> Box<dyn CustomAction> {
@@ -182,9 +260,6 @@ impl Buildable for Item {
             }
             Self::Comment(comment, level) => vec![InterpreterAction::Comment(comment, level)],
             Self::EndComment => vec![InterpreterAction::EndComment],
-            Self::AddMarker(name) => vec![InterpreterAction::PlaceMarker(name)],
-            Self::RemoveMarker(name) => vec![InterpreterAction::RemoveMarker(name)],
-            Self::AssertRelativePosition(name, offset, comment) => vec![InterpreterAction::AssertRelative(name, offset, comment)],
             Self::Custom(custom) => vec![InterpreterAction::Custom(custom)],
         }
     }
@@ -222,30 +297,4 @@ pub fn zero_cell() -> Item {
 
 pub fn zero_cell_up() -> Item {
     Loop::new(vec![Instruction::Inc.into()]).into()
-}
-
-#[track_caller]
-pub fn halt() -> Item {
-    let caller = std::panic::Location::caller();
-    Item::custom(move |tape, _| {
-        println!("[{caller}] - explicit halt");
-        println!("{tape}");
-        std::process::exit(1)
-    })
-}
-
-#[track_caller]
-pub fn assert_position(cell: usize, message: impl Into<String>) -> Item {
-    let caller = std::panic::Location::caller();
-    let message = message.into();
-    Item::custom(move |tape, pointer| {
-        if pointer != cell {
-            println!("[{caller}] - mismatched positions");
-            println!("expected: {cell}");
-            println!("actual  : {pointer}");
-            println!("source  : {message}");
-            println!("{tape}");
-            std::process::exit(1)
-        }
-    })
 }

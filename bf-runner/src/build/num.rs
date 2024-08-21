@@ -1,5 +1,5 @@
 use crate::{
-    build::{assert_position, offset_to_insns, zero_cell, Item, Loop},
+    build::{offset_to_insns, zero_cell, Item, Loop},
     Instruction,
 };
 
@@ -39,16 +39,16 @@ fn operate_level<N: NumericOperation>(space: usize, scratch_offset: isize) -> It
                 vec![
                     offset_to_insns(-scratch_offset),
                     Instruction::Left.into(),
-                    Item::AssertRelativePosition(marker_name.clone(), -1, "before recursion"),
+                    Item::assert_marker_offset(marker_name.clone(), -1, "before recursion"),
                     operate_level::<N>(space - 1, scratch_offset + 1),
-                    Item::AssertRelativePosition(marker_name.clone(), -1, "after recursion"),
+                    Item::assert_marker_offset(marker_name.clone(), -1, "after recursion"),
                     Instruction::Right.into(),
                     N::zero_reset(),
                     Instruction::Right.into(),
                     offset_to_insns(scratch_offset),
                 ]
             } else {
-                vec![assert_position(usize::MAX, "arithmetic overflow")]
+                vec![Item::assert_position(usize::MAX, "arithmetic overflow")]
             }
         })
         .indent()
@@ -61,28 +61,28 @@ fn operate_level<N: NumericOperation>(space: usize, scratch_offset: isize) -> It
     let v = if N::ZERO_CHECK_FIRST {
         vec![
             comment,
-            Item::AddMarker(marker_name.clone()),
+            Item::add_marker(marker_name.clone()),
             prep,
-            Item::AssertRelativePosition(marker_name.clone(), 0, "after prep"),
+            Item::assert_marker_offset(marker_name.clone(), 0, "after prep"),
             zero_check,
-            Item::AssertRelativePosition(marker_name.clone(), 0, "after zero check"),
+            Item::assert_marker_offset(marker_name.clone(), 0, "after zero check"),
             N::operation(),
-            Item::AssertRelativePosition(marker_name.clone(), 0, "after operation"),
-            Item::AssertRelativePosition(marker_name.clone(), 0, "after level"),
-            Item::RemoveMarker(marker_name),
+            Item::assert_marker_offset(marker_name.clone(), 0, "after operation"),
+            Item::assert_marker_offset(marker_name.clone(), 0, "after level"),
+            Item::remove_marker(marker_name),
         ]
     } else {
         vec![
             comment,
-            Item::AddMarker(marker_name.clone()),
+            Item::add_marker(marker_name.clone()),
             prep,
-            Item::AssertRelativePosition(marker_name.clone(), 0, "after prep"),
+            Item::assert_marker_offset(marker_name.clone(), 0, "after prep"),
             N::operation(),
-            Item::AssertRelativePosition(marker_name.clone(), 0, "after operation"),
+            Item::assert_marker_offset(marker_name.clone(), 0, "after operation"),
             zero_check,
-            Item::AssertRelativePosition(marker_name.clone(), 0, "after zero check"),
-            Item::AssertRelativePosition(marker_name.clone(), 0, "after level"),
-            Item::RemoveMarker(marker_name),
+            Item::assert_marker_offset(marker_name.clone(), 0, "after zero check"),
+            Item::assert_marker_offset(marker_name.clone(), 0, "after level"),
+            Item::remove_marker(marker_name),
         ]
     };
 
@@ -93,7 +93,7 @@ fn operate_level<N: NumericOperation>(space: usize, scratch_offset: isize) -> It
 pub fn operate<N: NumericOperation>(scratch_offset: isize) -> Item {
     let marker_name = format!("operation {}", N::NAME);
     Item::Sequence(vec![
-        Item::AddMarker(marker_name.clone()),
+        Item::add_marker(marker_name.clone()),
         offset_to_insns(scratch_offset),
         zero_cell(),
         Instruction::Right.into(),
@@ -101,8 +101,8 @@ pub fn operate<N: NumericOperation>(scratch_offset: isize) -> Item {
         Instruction::Left.into(),
         offset_to_insns(-scratch_offset),
         operate_level::<N>(N::WIDTH - 1, scratch_offset),
-        Item::AssertRelativePosition(marker_name.clone(), 0, "after total operation"),
-        Item::RemoveMarker(marker_name),
+        Item::assert_marker_offset(marker_name.clone(), 0, "after total operation"),
+        Item::remove_marker(marker_name),
     ])
 }
 
