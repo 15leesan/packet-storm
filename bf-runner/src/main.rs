@@ -775,6 +775,177 @@ fn output() -> anyhow::Result<Item> {
         ])
     }
 
+    fn divide() -> Item {
+        fn new_zero_check(temp_copy: isize, accumulator: isize) -> Item {
+            Item::Sequence(vec![
+                Loop::new(vec![
+                    Instruction::Dec.into(),
+                    offset_to_insns(temp_copy),
+                    Instruction::Inc.into(),
+                    offset_to_insns(-temp_copy),
+                    offset_to_insns(accumulator),
+                    Instruction::Inc.into(),
+                    offset_to_insns(-accumulator),
+                ])
+                .into(),
+                offset_to_insns(temp_copy),
+                drain(&[-temp_copy], true),
+                offset_to_insns(-temp_copy),
+            ])
+        }
+
+        // On the last cell of the number
+        fn zero_check_number(width: usize, temp_copy: isize, accumulator: isize) -> Item {
+            let s = (0..width)
+                .flat_map(|i| [new_zero_check(temp_copy + i as isize, accumulator + i as isize), Instruction::Left.into()])
+                .collect();
+
+            Item::Sequence(vec![
+                offset_to_insns(accumulator),
+                zero_cell(),
+                offset_to_insns(-accumulator),
+                Item::Sequence(s),
+                offset_to_insns(width as _),
+            ])
+            .comment(format!("zero check number {{width={width}}}"), 120)
+        }
+
+        const ZC: usize = 0;
+        const SC: usize = 1;
+
+        /*
+        N - number (decimal 9)
+        D - divisor (decimal 7)
+        T - temporary storage (decimal 7)
+        Q - quotient (decimal 9)
+         */
+
+        const NW: usize = Positions::TRANSPORT_BYTES_WIDTH;
+        const N: usize = SC + 2 + NW - 1; // = 11
+        const N0: usize = N + 1;
+
+        const DW: usize = Positions::NO_PACKETS_WIDTH;
+        const D: usize = N0 + DW; // = 19
+        const D0: usize = D + 1;
+
+        const TW: usize = DW;
+        const T: usize = D0 + TW;
+        const T0: usize = T + 1;
+
+        const QW: usize = NW;
+        const Q: usize = T0 + QW;
+        const Q0: usize = Q + 1;
+
+        Item::Sequence(vec![
+            assert_position(0, "before division"),
+            offset_to_insns(offset_from(0, N)),
+            Item::AssertRelativePosition("divide N".to_owned(), 0, "N correctly positioned"),
+            offset_to_insns(offset_from(N, D)),
+            Item::AssertRelativePosition("divide D".to_owned(), 0, "D correctly positioned"),
+            offset_to_insns(offset_from(D, 0)),
+            offset_to_insns(offset_from(0, T0)),
+            Instruction::Inc.conv::<Item>().repeat(10),
+            Loop::new(vec![
+                Instruction::Dec.into(),
+                Item::Sequence(vec![Instruction::Left.into(), Instruction::Dec.into()]).repeat(TW),
+                Instruction::Right.conv::<Item>().repeat(TW),
+            ])
+            .into(),
+            assert_position(T0, "after init"),
+            offset_to_insns(offset_from(T0, 0)),
+            offset_to_insns(offset_from(0, Q0)),
+            Instruction::Inc.conv::<Item>().repeat(10),
+            Loop::new(vec![
+                Instruction::Dec.into(),
+                Item::Sequence(vec![Instruction::Left.into(), Instruction::Dec.into()]).repeat(QW),
+                offset_to_insns(QW as _),
+            ])
+            .into(),
+            assert_position(Q0, "Q setup"),
+            offset_to_insns(offset_from(Q0, 0)),
+            // Setup complete, at cell 0
+            offset_to_insns(offset_from(0, N)),
+            zero_check_number(NW, offset_from(N, SC), offset_from(N, ZC)),
+            assert_position(N, "still here"),
+            offset_to_insns(offset_from(N, ZC)),
+            Loop::new(vec![
+                zero_cell(),
+                offset_to_insns(offset_from(ZC, N)),
+                operate::<DecimalSub<NW>>(offset_from(N, ZC)),
+                assert_position(N, "after N subtract"),
+                offset_to_insns(offset_from(N, ZC)),
+                zero_cell(),
+                offset_to_insns(offset_from(ZC, D)),
+                operate::<DecimalSub<DW>>(offset_from(D, ZC)),
+                assert_position(D, "after D subtract"),
+                zero_check_number(DW, offset_from(D, SC), offset_from(D, ZC)),
+                offset_to_insns(offset_from(D, ZC)),
+                drain(&[offset_from(ZC, N0)], true),
+                offset_to_insns(offset_from(ZC, T)),
+                operate::<DecimalAdd<TW>>(offset_from(T, ZC)),
+                assert_position(T, "after T add"),
+                offset_to_insns(offset_from(T, N0)),
+                drain(&[offset_from(N0, ZC)], true),
+                offset_to_insns(offset_from(N0, ZC)),
+                Instruction::Right.into(),
+                zero_cell(),
+                Instruction::Inc.into(),
+                Instruction::Left.into(),
+                // If nonzero (i.e. d != 0)
+                Loop::new(vec![
+                    zero_cell(),
+                    Instruction::Right.into(),
+                    zero_cell(),
+                    Instruction::Left.into(),
+                ])
+                .into(),
+                Instruction::Right.into(),
+                assert_position(ZC + 1, "before else"),
+                // Else (i.e. d == 0)
+                Loop::new(vec![
+                    zero_cell(),
+                    offset_to_insns(offset_from(ZC + 1, T)),
+                    Item::Sequence(vec![drain(&[offset_from(T, D)], true), Instruction::Left.into()]).repeat(TW),
+                    assert_position(D + 1, "after restore D"),
+                    offset_to_insns(offset_from(D + 1, T0)),
+                    Instruction::Inc.conv::<Item>().repeat(10),
+                    Loop::new(vec![
+                        Instruction::Dec.into(),
+                        Item::Sequence(vec![Instruction::Left.into(), Instruction::Dec.into()]).repeat(TW),
+                        Instruction::Left.into(),
+                        Item::Sequence(vec![Instruction::Left.into(), Instruction::Inc.into()]).repeat(DW),
+                        Instruction::Right.conv::<Item>().repeat(TW + DW + 1),
+                    ])
+                    .into(),
+                    assert_position(T0, "after unreset T+D"),
+                    offset_to_insns(offset_from(T0, Q)),
+                    operate::<DecimalAdd<QW>>(offset_from(Q, ZC)),
+                    assert_position(Q, "after increment Q"),
+                    offset_to_insns(offset_from(Q, ZC + 1)),
+                ])
+                .into(),
+                offset_to_insns(offset_from(ZC + 1, N)),
+                zero_check_number(NW, offset_from(N, SC), offset_from(N, ZC)),
+                assert_position(N, "before loop"),
+                offset_to_insns(offset_from(N, ZC)),
+            ])
+            .into(),
+            offset_to_insns(offset_from(ZC, Q0)),
+            Instruction::Inc.conv::<Item>().repeat(10),
+            Loop::new(vec![
+                Instruction::Dec.into(),
+                Item::Sequence(vec![Instruction::Left.into(), Instruction::Inc.into()]).repeat(QW),
+                offset_to_insns(QW as _),
+            ])
+            .into(),
+            assert_position(Q0, "Q desetup"),
+            offset_to_insns(-(QW as isize)),
+            display_decimal(QW, 0),
+            assert_position(Q - QW + 1, "after division"),
+            offset_to_insns(offset_from(Q - QW + 1, 0)),
+        ])
+    }
+
     Ok(Item::Sequence(vec![
         assert_position(Positions::PACKET_LOOP_START, "after loop"),
         Item::Comment("begin output".into(), 240),
@@ -880,177 +1051,6 @@ fn output() -> anyhow::Result<Item> {
         assert_position(Positions::LIST_START, "division cleanup done"),
         // TODO: output destination IP stats
     ]))
-}
-
-fn divide() -> Item {
-    fn new_zero_check(temp_copy: isize, accumulator: isize) -> Item {
-        Item::Sequence(vec![
-            Loop::new(vec![
-                Instruction::Dec.into(),
-                offset_to_insns(temp_copy),
-                Instruction::Inc.into(),
-                offset_to_insns(-temp_copy),
-                offset_to_insns(accumulator),
-                Instruction::Inc.into(),
-                offset_to_insns(-accumulator),
-            ])
-            .into(),
-            offset_to_insns(temp_copy),
-            drain(&[-temp_copy], true),
-            offset_to_insns(-temp_copy),
-        ])
-    }
-
-    // On the last cell of the number
-    fn zero_check_number(width: usize, temp_copy: isize, accumulator: isize) -> Item {
-        let s = (0..width)
-            .flat_map(|i| [new_zero_check(temp_copy + i as isize, accumulator + i as isize), Instruction::Left.into()])
-            .collect();
-
-        Item::Sequence(vec![
-            offset_to_insns(accumulator),
-            zero_cell(),
-            offset_to_insns(-accumulator),
-            Item::Sequence(s),
-            offset_to_insns(width as _),
-        ])
-        .comment(format!("zero check number {{width={width}}}"), 120)
-    }
-
-    const ZC: usize = 0;
-    const SC: usize = 1;
-
-    /*
-    N - number (decimal 9)
-    D - divisor (decimal 7)
-    T - temporary storage (decimal 7)
-    Q - quotient (decimal 9)
-     */
-
-    const NW: usize = Positions::TRANSPORT_BYTES_WIDTH;
-    const N: usize = SC + 2 + NW - 1; // = 11
-    const N0: usize = N + 1;
-
-    const DW: usize = Positions::NO_PACKETS_WIDTH;
-    const D: usize = N0 + DW; // = 19
-    const D0: usize = D + 1;
-
-    const TW: usize = DW;
-    const T: usize = D0 + TW;
-    const T0: usize = T + 1;
-
-    const QW: usize = NW;
-    const Q: usize = T0 + QW;
-    const Q0: usize = Q + 1;
-
-    Item::Sequence(vec![
-        assert_position(0, "before division"),
-        offset_to_insns(offset_from(0, N)),
-        Item::AssertRelativePosition("divide N".to_owned(), 0, "N correctly positioned"),
-        offset_to_insns(offset_from(N, D)),
-        Item::AssertRelativePosition("divide D".to_owned(), 0, "D correctly positioned"),
-        offset_to_insns(offset_from(D, 0)),
-        offset_to_insns(offset_from(0, T0)),
-        Instruction::Inc.conv::<Item>().repeat(10),
-        Loop::new(vec![
-            Instruction::Dec.into(),
-            Item::Sequence(vec![Instruction::Left.into(), Instruction::Dec.into()]).repeat(TW),
-            Instruction::Right.conv::<Item>().repeat(TW),
-        ])
-        .into(),
-        assert_position(T0, "after init"),
-        offset_to_insns(offset_from(T0, 0)),
-        offset_to_insns(offset_from(0, Q0)),
-        Instruction::Inc.conv::<Item>().repeat(10),
-        Loop::new(vec![
-            Instruction::Dec.into(),
-            Item::Sequence(vec![Instruction::Left.into(), Instruction::Dec.into()]).repeat(QW),
-            offset_to_insns(QW as _),
-        ])
-        .into(),
-        assert_position(Q0, "Q setup"),
-        offset_to_insns(offset_from(Q0, 0)),
-        // Setup complete, at cell 0
-        offset_to_insns(offset_from(0, N)),
-        zero_check_number(NW, offset_from(N, SC), offset_from(N, ZC)),
-        assert_position(N, "still here"),
-        offset_to_insns(offset_from(N, ZC)),
-        Loop::new(vec![
-            zero_cell(),
-            offset_to_insns(offset_from(ZC, N)),
-            operate::<DecimalSub<NW>>(offset_from(N, ZC)),
-            assert_position(N, "after N subtract"),
-            offset_to_insns(offset_from(N, ZC)),
-            zero_cell(),
-            offset_to_insns(offset_from(ZC, D)),
-            operate::<DecimalSub<DW>>(offset_from(D, ZC)),
-            assert_position(D, "after D subtract"),
-            zero_check_number(DW, offset_from(D, SC), offset_from(D, ZC)),
-            offset_to_insns(offset_from(D, ZC)),
-            drain(&[offset_from(ZC, N0)], true),
-            offset_to_insns(offset_from(ZC, T)),
-            operate::<DecimalAdd<TW>>(offset_from(T, ZC)),
-            assert_position(T, "after T add"),
-            offset_to_insns(offset_from(T, N0)),
-            drain(&[offset_from(N0, ZC)], true),
-            offset_to_insns(offset_from(N0, ZC)),
-            Instruction::Right.into(),
-            zero_cell(),
-            Instruction::Inc.into(),
-            Instruction::Left.into(),
-            // If nonzero (i.e. d != 0)
-            Loop::new(vec![
-                zero_cell(),
-                Instruction::Right.into(),
-                zero_cell(),
-                Instruction::Left.into(),
-            ])
-            .into(),
-            Instruction::Right.into(),
-            assert_position(ZC + 1, "before else"),
-            // Else (i.e. d == 0)
-            Loop::new(vec![
-                zero_cell(),
-                offset_to_insns(offset_from(ZC + 1, T)),
-                Item::Sequence(vec![drain(&[offset_from(T, D)], true), Instruction::Left.into()]).repeat(TW),
-                assert_position(D + 1, "after restore D"),
-                offset_to_insns(offset_from(D + 1, T0)),
-                Instruction::Inc.conv::<Item>().repeat(10),
-                Loop::new(vec![
-                    Instruction::Dec.into(),
-                    Item::Sequence(vec![Instruction::Left.into(), Instruction::Dec.into()]).repeat(TW),
-                    Instruction::Left.into(),
-                    Item::Sequence(vec![Instruction::Left.into(), Instruction::Inc.into()]).repeat(DW),
-                    Instruction::Right.conv::<Item>().repeat(TW + DW + 1),
-                ])
-                .into(),
-                assert_position(T0, "after unreset T+D"),
-                offset_to_insns(offset_from(T0, Q)),
-                operate::<DecimalAdd<QW>>(offset_from(Q, ZC)),
-                assert_position(Q, "after increment Q"),
-                offset_to_insns(offset_from(Q, ZC + 1)),
-            ])
-            .into(),
-            offset_to_insns(offset_from(ZC + 1, N)),
-            zero_check_number(NW, offset_from(N, SC), offset_from(N, ZC)),
-            assert_position(N, "before loop"),
-            offset_to_insns(offset_from(N, ZC)),
-        ])
-        .into(),
-        offset_to_insns(offset_from(ZC, Q0)),
-        Instruction::Inc.conv::<Item>().repeat(10),
-        Loop::new(vec![
-            Instruction::Dec.into(),
-            Item::Sequence(vec![Instruction::Left.into(), Instruction::Inc.into()]).repeat(QW),
-            offset_to_insns(QW as _),
-        ])
-        .into(),
-        assert_position(Q0, "Q desetup"),
-        offset_to_insns(-(QW as isize)),
-        display_decimal(QW, 0),
-        assert_position(Q - QW + 1, "after division"),
-        offset_to_insns(offset_from(Q - QW + 1, 0)),
-    ])
 }
 
 fn main() -> anyhow::Result<()> {
