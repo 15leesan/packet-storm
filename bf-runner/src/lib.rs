@@ -85,9 +85,6 @@ impl Interpreter {
                         self.instruction_pointer = matching;
                     }
                 }
-                InterpreterAction::AssertPosition(desired, why) => {
-                    assert_eq!(self.tape_pointer, desired, "{why}\n{}\n", self.tape());
-                }
                 InterpreterAction::Comment(ref text, level) => {
                     // if self.enable_printing {
                     if let Some(min_level) = self.printing_level {
@@ -98,9 +95,6 @@ impl Interpreter {
                 }
                 InterpreterAction::EndComment => {}
                 InterpreterAction::Indent(_) => {}
-                InterpreterAction::PrintTape => {
-                    println!("{}", self.tape());
-                }
                 InterpreterAction::PlaceMarker(ref name) => {
                     let old = self.markers.insert(name.clone(), self.tape_pointer);
                     assert!(old.is_none(), "marker {name:?} already exists")
@@ -132,17 +126,23 @@ impl Interpreter {
     }
 
     pub fn tape(&self) -> Tape<'_> {
-        Tape(self)
+        Tape {
+            at: self.tape_pointer,
+            tape: &self.tape,
+        }
     }
 }
 
-pub struct Tape<'a>(&'a Interpreter);
+pub struct Tape<'a> {
+    at: usize,
+    tape: &'a [u8],
+}
 
 impl Display for Tape<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "[")?;
-        for (i, c) in self.0.tape.iter().enumerate() {
-            if i == self.0.tape_pointer {
+        for (i, c) in self.tape.iter().enumerate() {
+            if i == self.at {
                 write!(f, " [{c:3}]")?;
             } else {
                 write!(f, " {c:3}")?;
@@ -157,7 +157,7 @@ impl Deref for Tape<'_> {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        &self.0.tape
+        self.tape
     }
 }
 
@@ -223,9 +223,7 @@ impl Program {
                     s.push('\n');
                     s.push_str(&indent_str);
                 }
-                InterpreterAction::AssertPosition(_, _)
-                | InterpreterAction::PrintTape
-                | InterpreterAction::AssertRelative(_, _, _)
+                InterpreterAction::AssertRelative(_, _, _)
                 | InterpreterAction::PlaceMarker(_)
                 | InterpreterAction::RemoveMarker(_)
                 | InterpreterAction::Custom(_) => {}

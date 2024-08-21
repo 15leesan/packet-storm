@@ -1,5 +1,5 @@
 use crate::{
-    build::{offset_to_insns, zero_cell, Item, Loop},
+    build::{assert_position, offset_to_insns, zero_cell, Item, Loop},
     Instruction,
 };
 
@@ -48,7 +48,7 @@ fn operate_level<N: NumericOperation>(space: usize, scratch_offset: isize) -> It
                     offset_to_insns(scratch_offset),
                 ]
             } else {
-                vec![Item::AssertPosition(usize::MAX, "arithmetic overflow")]
+                vec![assert_position(usize::MAX, "arithmetic overflow")]
             }
         })
         .indent()

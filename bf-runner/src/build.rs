@@ -10,12 +10,10 @@ pub mod num;
 pub enum Item {
     Sequence(Vec<Self>),
     Direct(Instruction),
-    AssertPosition(usize, &'static str),
     Loop(Loop),
     Repeat { item: Box<Self>, n: usize },
     Comment(String, u8),
     EndComment,
-    PrintTape,
     AddMarker(String),
     RemoveMarker(String),
     AssertRelativePosition(String, isize, &'static str),
@@ -107,11 +105,9 @@ pub fn drain(offsets: &[isize], add: bool) -> Item {
 #[derive(Debug, Clone)]
 pub enum InterpreterAction {
     Instruction(Instruction),
-    AssertPosition(usize, &'static str),
     Comment(String, u8),
     EndComment,
     Indent(bool),
-    PrintTape,
     PlaceMarker(String),
     RemoveMarker(String),
     AssertRelative(String, isize, &'static str),
@@ -184,12 +180,8 @@ impl Buildable for Item {
                 let item = item.build();
                 std::iter::repeat(item).take(n).flatten().collect()
             }
-            Self::AssertPosition(desired, why) => {
-                vec![InterpreterAction::AssertPosition(desired, why)]
-            }
             Self::Comment(comment, level) => vec![InterpreterAction::Comment(comment, level)],
             Self::EndComment => vec![InterpreterAction::EndComment],
-            Self::PrintTape => vec![InterpreterAction::PrintTape],
             Self::AddMarker(name) => vec![InterpreterAction::PlaceMarker(name)],
             Self::RemoveMarker(name) => vec![InterpreterAction::RemoveMarker(name)],
             Self::AssertRelativePosition(name, offset, comment) => vec![InterpreterAction::AssertRelative(name, offset, comment)],
@@ -230,4 +222,30 @@ pub fn zero_cell() -> Item {
 
 pub fn zero_cell_up() -> Item {
     Loop::new(vec![Instruction::Inc.into()]).into()
+}
+
+#[track_caller]
+pub fn halt() -> Item {
+    let caller = std::panic::Location::caller();
+    Item::custom(move |tape, _| {
+        println!("[{caller}] - explicit halt");
+        println!("{tape}");
+        std::process::exit(1)
+    })
+}
+
+#[track_caller]
+pub fn assert_position(cell: usize, message: impl Into<String>) -> Item {
+    let caller = std::panic::Location::caller();
+    let message = message.into();
+    Item::custom(move |tape, pointer| {
+        if pointer != cell {
+            println!("[{caller}] - mismatched positions");
+            println!("expected: {cell}");
+            println!("actual  : {pointer}");
+            println!("source  : {message}");
+            println!("{tape}");
+            std::process::exit(1)
+        }
+    })
 }
