@@ -326,9 +326,12 @@ impl Positions {
     const SECONDARY_IP_STORED_START: usize = Self::LIST_HEADSTOP + 2;
     const LIST_START: usize = Self::LIST_HEADSTOP + ListEntry::WIDTH;
 
-    const GREATER_FLAG: usize = Self::LIST_HEADSTOP + 1;
-    const GENERAL_COUNT: usize = Self::GREATER_FLAG + 1;
-    const LIST_LOOP_FLAG: usize = Self::GENERAL_COUNT + 1;
+    const GREATER_FLAG: usize = Self::LIST_HEADSTOP - 1;
+    const GENERAL_COUNT: usize = Self::GREATER_FLAG - 1;
+    const LIST_LOOP_FLAG: usize = Self::GENERAL_COUNT - 1;
+    const FOUND_IP: usize = Self::LIST_LOOP_FLAG - 4;
+    const TARGET_COUNT: usize = Self::FOUND_IP - 1;
+    const TEXT_SPACE: usize = Self::TARGET_COUNT - 8;
 }
 
 fn setup_state() -> Item {
@@ -716,6 +719,15 @@ fn output() -> anyhow::Result<Item> {
         UDP,
         TCPNewline,
         BytesPerPacket,
+        MostPopular,
+        DestinationWas,
+        DestinationsWere,
+        And,
+        Other,
+        With,
+        Packet,
+        Each,
+        Newline,
     }
 
     fn write_text(text: Text) -> Item {
@@ -773,6 +785,98 @@ fn output() -> anyhow::Result<Item> {
                     .expect("should be valid")
                     .comment("write \" bytes/packet\\n\"", 220),
                     Item::assert_marker_offset(marker.clone(), 5, "after text write"),
+                    Loop::new(vec![zero_cell(), Instruction::Left.into()]).into(),
+                ]
+            }
+            Text::MostPopular => {
+                vec![
+                    Item::parse(
+                        "++++++++++[>++++++++>+++++++++++>+++>++++++++++>++++++++++<<<<<-]>---.\
+                        >+.++++.+.>++.<----.-.+.+++++.---------.>>---.<<++++++.>.>>.+.<<<+.+.>>>++++\
+                        .+++++.<.<<.>>>-----.++++++.-.",
+                    )
+                    .expect("should be valid")
+                    .comment("write \"Most popular destination\"", 220),
+                    Item::assert_marker_offset(marker.clone(), 5, "after text write"),
+                    Loop::new(vec![zero_cell(), Instruction::Left.into()]).into(),
+                ]
+            }
+            Text::DestinationWas => {
+                vec![
+                    Item::parse("++++++++++[>+++>++++++++++++>++++++++++<<<-]>++.>-.>---.<----.<.")
+                        .expect("should be valid")
+                        .comment("write \" was \"", 220),
+                    Item::assert_marker_offset(marker.clone(), 1, "after text write"),
+                    offset_to_insns(2),
+                    Loop::new(vec![zero_cell(), Instruction::Left.into()]).into(),
+                ]
+            }
+            Text::DestinationsWere => {
+                vec![
+                    Item::parse(
+                        "++++++++++[>++++++++++++>+++>++++++++++<<<-]>-----.>++.<++++.\
+                    >>+.<<-----.>>.<.",
+                    )
+                    .expect("should be valid")
+                    .comment("write \"s were \"", 220),
+                    Item::assert_marker_offset(marker.clone(), 2, "after text write"),
+                    offset_to_insns(1),
+                    Loop::new(vec![zero_cell(), Instruction::Left.into()]).into(),
+                ]
+            }
+            Text::And => {
+                vec![
+                    Item::parse("++++++++++[>+++>++++++++++>+++++++++++<<<-]>++.>---.>.<+++.<.")
+                        .expect("should be valid")
+                        .comment("write \" and \"", 220),
+                    Item::assert_marker_offset(marker.clone(), 1, "after text write"),
+                    offset_to_insns(2),
+                    Loop::new(vec![zero_cell(), Instruction::Left.into()]).into(),
+                ]
+            }
+            Text::Other => {
+                vec![
+                    Item::parse("++++++++++[>+++>+++++++++++>++++++++++<<<-]>++.>+.+++++.>++++.---.<--.")
+                        .expect("should be valid")
+                        .comment("write \" other\"", 220),
+                    Item::assert_marker_offset(marker.clone(), 2, "after text write"),
+                    offset_to_insns(1),
+                    Loop::new(vec![zero_cell(), Instruction::Left.into()]).into(),
+                ]
+            }
+            Text::With => {
+                vec![
+                    Item::parse("++++++++++[>+++>++++++++++++>+++++++++++<<<-]>++.>-.>-----.<---.>-.<<.")
+                        .expect("should be valid")
+                        .comment("write \" with \"", 220),
+                    Item::assert_marker_offset(marker.clone(), 1, "after text write"),
+                    offset_to_insns(2),
+                    Loop::new(vec![zero_cell(), Instruction::Left.into()]).into(),
+                ]
+            }
+            Text::Packet => {
+                vec![
+                    Item::parse("++++++++++[>+++>+++++++++++>++++++++++<<<-]>++.>++.>---.++.<-----.>++.<+++++++++.")
+                        .expect("should be valid")
+                        .comment("write \" packet\"", 220),
+                    Item::assert_marker_offset(marker.clone(), 2, "after text write"),
+                    offset_to_insns(1),
+                    Loop::new(vec![zero_cell(), Instruction::Left.into()]).into(),
+                ]
+            }
+            Text::Each => {
+                vec![
+                    Item::parse("++++++++[>++++>+++++++++++++<<-]>.>---.----.++.+++++.")
+                        .expect("should be valid")
+                        .comment("write \" each\"", 220),
+                    Item::assert_marker_offset(marker.clone(), 2, "after text write"),
+                    Loop::new(vec![zero_cell(), Instruction::Left.into()]).into(),
+                ]
+            }
+            Text::Newline => {
+                vec![
+                    Item::parse("+++[>+++<-]>+.").expect("should be valid").comment("write \"\\n\"", 220),
+                    Item::assert_marker_offset(marker.clone(), 1, "after text write"),
                     Loop::new(vec![zero_cell(), Instruction::Left.into()]).into(),
                 ]
             }
@@ -991,6 +1095,42 @@ fn output() -> anyhow::Result<Item> {
             offset_to_insns(offset_from(Positions::LIST_HEADSTOP, Positions::LIST_START)),
         ])
         .comment(format!("list pass: {pass_name}"), 180)
+    }
+
+    // Not useful for the wider numbers as it relies on the number being single-cell
+    fn print_decimal_cell() -> Item {
+        // Taken from https://esolangs.org/wiki/Brainfuck_algorithms#Print_value_of_cell_x_as_number_(8-bit)
+        // I'm not 100% certain how this works
+        Item::parse(
+            ">>++++++++++<<[->+>-[>+>>]>[+[-<+>]>+>>]<<<<<<]>>[-]>>>++++++++++<[->-[>+>>]>\
+            [+[-<+>]>+>>]<<<<<]>[-]>>[>++++++[-<++++++++>]<.<<+>+>[-]]<[<[->-<]++++++[->++++++++<]>.[-]\
+            ]<<++++++[-<++++++++>]<.[-]<<[-<+>]<",
+        )
+        .expect("should be valid")
+    }
+
+    fn pull_back(offset: usize) -> Item {
+        Item::Sequence(vec![
+            Item::assert_marker_offset("target IP", 0, format!("pull {offset}")),
+            offset_to_insns(offset_from(ListEntry::EXIST_FLAG, ListEntry::DATA_START + offset)),
+            Loop::new(vec![
+                Instruction::Dec.into(),
+                offset_to_insns(offset_from(ListEntry::DATA_START + offset, ListEntry::EXIST_FLAG)),
+                Instruction::Left.conv::<Item>().repeat(ListEntry::WIDTH),
+                Loop::new(vec![Instruction::Left.conv::<Item>().repeat(ListEntry::WIDTH)]).into(),
+                Item::assert_position(Positions::LIST_HEADSTOP, "return to headstop"),
+                offset_to_insns(offset_from(Positions::LIST_HEADSTOP, Positions::FOUND_IP + offset)),
+                Instruction::Inc.into(),
+                offset_to_insns(offset_from(Positions::FOUND_IP + offset, Positions::LIST_START)),
+                Loop::new(vec![Instruction::Right.conv::<Item>().repeat(ListEntry::WIDTH)]).into(),
+                Item::assert_marker_offset("target IP", 0, "return to target"),
+                offset_to_insns(offset_from(ListEntry::EXIST_FLAG, ListEntry::DATA_START + offset)),
+            ])
+            .indent()
+            .into(),
+            offset_to_insns(offset_from(ListEntry::DATA_START + offset, ListEntry::EXIST_FLAG)),
+            Item::assert_marker_offset("target IP", 0, format!("pull {offset} finish")),
+        ])
     }
 
     Ok(Item::Sequence(vec![
@@ -1287,9 +1427,174 @@ fn output() -> anyhow::Result<Item> {
         .indent()
         .into(),
         Item::assert_position(Positions::LIST_LOOP_FLAG, "after loop"),
+        offset_to_insns(offset_from(Positions::LIST_LOOP_FLAG, Positions::LIST_START)),
         // At this point, entries are flagged iff they are maximal-count
         // `Positions::GENERAL_COUNT` contains the maximum count
-        // TODO: Output
+        list_pass("copy out first maximal IP", |brk| {
+            Item::Sequence(vec![
+                Instruction::Right.into(),
+                Loop::new(vec![
+                    Instruction::Left.into(),
+                    Item::assert_marker_offset("current item", ListEntry::EXIST_FLAG as _, "exist flag"),
+                    Item::add_marker("target IP"),
+                    zero_cell(),
+                    Item::custom(move |_, _, _| brk.store(true, Ordering::SeqCst)),
+                    pull_back(0),
+                    pull_back(1),
+                    pull_back(2),
+                    pull_back(3),
+                    Instruction::Inc.into(),
+                    Item::remove_marker("target IP"),
+                    Loop::new(vec![Instruction::Right.conv::<Item>().repeat(ListEntry::WIDTH)]).into(),
+                    Instruction::Right.conv::<Item>().repeat(ListEntry::WIDTH),
+                    offset_to_insns(offset_from(ListEntry::WIDTH, 1)),
+                ])
+                .into(),
+                offset_to_insns(offset_from(1, ListEntry::WIDTH)),
+            ])
+        }),
+        list_pass("count targets", |_| {
+            Item::Sequence(vec![
+                Instruction::Right.into(),
+                Loop::new(vec![
+                    zero_cell(),
+                    Instruction::Left.into(),
+                    Item::assert_marker_offset("current item", ListEntry::EXIST_FLAG as _, "exist flag"),
+                    Item::add_marker("current target"),
+                    zero_cell(),
+                    Instruction::Left.conv::<Item>().repeat(ListEntry::WIDTH),
+                    Loop::new(vec![Instruction::Left.conv::<Item>().repeat(ListEntry::WIDTH)]).into(),
+                    Item::assert_position(Positions::LIST_HEADSTOP, "return to headstop"),
+                    offset_to_insns(offset_from(Positions::LIST_HEADSTOP, Positions::TARGET_COUNT)),
+                    Instruction::Inc.into(),
+                    offset_to_insns(offset_from(Positions::TARGET_COUNT, Positions::LIST_START)),
+                    Loop::new(vec![Instruction::Right.conv::<Item>().repeat(ListEntry::WIDTH)]).into(),
+                    Item::assert_marker_offset("current target", 0, "return to target"),
+                    Instruction::Inc.into(),
+                    Item::remove_marker("current target"),
+                    Instruction::Right.into(),
+                ])
+                .into(),
+                offset_to_insns(offset_from(1, ListEntry::WIDTH)),
+            ])
+        }),
+        // At this point, all information that we need *should* have been pulled from the list
+        // Clear the first entry as we (may?) need the space
+        Item::Sequence(vec![zero_cell(), Instruction::Right.into()]).repeat(ListEntry::WIDTH),
+        offset_to_insns(offset_from(Positions::LIST_START + ListEntry::WIDTH, Positions::TEXT_SPACE)),
+        write_text(Text::MostPopular),
+        offset_to_insns(offset_from(Positions::TEXT_SPACE, Positions::TARGET_COUNT - 1)),
+        /*
+        Format:
+           c=1  Most popular destination was IP with N packet[s]
+           c>1  Most popular destinations were IP and M other[s] with N packet[s] each
+         */
+        Instruction::Inc.into(),
+        Instruction::Right.into(),
+        // TEMP: pretend there are more destinations
+        Instruction::Inc.into(),
+        Instruction::Inc.into(),
+        Instruction::Inc.into(),
+        //
+        Instruction::Dec.into(),
+        // If nonzero, `cell` extra destinations
+        Loop::new(vec![
+            offset_to_insns(offset_from(Positions::TARGET_COUNT, Positions::TEXT_SPACE)),
+            write_text(Text::DestinationsWere),
+            offset_to_insns(offset_from(Positions::TEXT_SPACE, Positions::TARGET_COUNT)),
+            drain(&[-2], true),
+            Instruction::Left.into(),
+            Instruction::Dec.into(),
+            Instruction::Right.into(),
+        ])
+        .into(),
+        Instruction::Left.into(),
+        Loop::new(vec![
+            zero_cell(),
+            offset_to_insns(offset_from(Positions::TARGET_COUNT - 1, Positions::TEXT_SPACE)),
+            write_text(Text::DestinationWas),
+            offset_to_insns(offset_from(Positions::TEXT_SPACE, Positions::TARGET_COUNT - 1)),
+        ])
+        .into(),
+        offset_to_insns(offset_from(Positions::TARGET_COUNT - 1, Positions::FOUND_IP - 8)),
+        Instruction::Left.into(),
+        Item::Sequence(vec![Instruction::Right.into(), Instruction::Inc.conv::<Item>().repeat(2)]).repeat(4),
+        Instruction::Dec.into(),
+        Instruction::Left.conv::<Item>().repeat(9),
+        // set cell to b'.'
+        Item::parse("+++++++[>+++++++<-]>---").expect("should be valid"),
+        drain(&[1, 1, 1, 1], true),
+        offset_to_insns(5),
+        Loop::new(vec![
+            Instruction::Dec.into(),
+            offset_to_insns(8),
+            drain(&[6], true),
+            offset_to_insns(6),
+            print_decimal_cell(),
+            zero_cell(),
+            offset_to_insns(-(6 + 8)),
+            // print b'.' if required
+            Loop::new(vec![
+                zero_cell(),
+                offset_to_insns(-4),
+                Instruction::Output.into(),
+                offset_to_insns(4),
+            ])
+            .into(),
+            Instruction::Right.into(),
+        ])
+        .indent()
+        .into(),
+        Item::assert_position(Positions::TARGET_COUNT - 2 - 1, "after IP output"), // -2 because it was `drain`ed to the left
+        offset_to_insns(-5),
+        Loop::new(vec![zero_cell(), Instruction::Left.into()]).into(),
+        Item::assert_position(Positions::TARGET_COUNT - 2 - 10, "after IP cleanup"),
+        offset_to_insns(offset_from(Positions::TARGET_COUNT - 2 - 10, Positions::TARGET_COUNT - 2)),
+        // If nonzero, `cell` extra destinations
+        Instruction::Left.into(),
+        Instruction::Left.into(),
+        Item::parse("+++++++++++[>++++++++++<-]>+++++").expect("should be valid"),
+        Instruction::Right.into(),
+        Loop::new(vec![
+            offset_to_insns(offset_from(Positions::TARGET_COUNT - 2, Positions::TEXT_SPACE)),
+            write_text(Text::And),
+            offset_to_insns(offset_from(Positions::TEXT_SPACE, Positions::TARGET_COUNT - 2)),
+            print_decimal_cell(),
+            offset_to_insns(offset_from(Positions::TARGET_COUNT - 2, Positions::TEXT_SPACE)),
+            write_text(Text::Other),
+            // Leave a marker of multiple IPs for later
+            Instruction::Left.into(),
+            Instruction::Inc.into(),
+            Instruction::Right.into(),
+            offset_to_insns(offset_from(Positions::TEXT_SPACE, Positions::TARGET_COUNT - 2)),
+            Instruction::Dec.into(),
+            Loop::new(vec![
+                zero_cell(),
+                Instruction::Left.into(),
+                Instruction::Output.into(),
+                Instruction::Right.into(),
+            ])
+            .into(),
+        ])
+        .into(),
+        offset_to_insns(offset_from(Positions::TARGET_COUNT - 2, Positions::TEXT_SPACE)),
+        write_text(Text::With),
+        offset_to_insns(offset_from(Positions::TEXT_SPACE, Positions::GENERAL_COUNT)),
+        print_decimal_cell(),
+        offset_to_insns(offset_from(Positions::GENERAL_COUNT, Positions::TEXT_SPACE)),
+        write_text(Text::Packet),
+        offset_to_insns(offset_from(Positions::TEXT_SPACE, Positions::GENERAL_COUNT)),
+        Instruction::Dec.into(),
+        Loop::new(vec![
+            zero_cell(),
+            offset_to_insns(-9),
+            Instruction::Output.into(),
+            offset_to_insns(9),
+        ])
+        .into(),
+        offset_to_insns(offset_from(Positions::GENERAL_COUNT, Positions::TEXT_SPACE - 1)),
+        Loop::new(vec![zero_cell(), write_text(Text::Each)]).into(),
+        write_text(Text::Newline),
     ]))
 }
 
