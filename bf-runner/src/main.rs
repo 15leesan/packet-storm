@@ -619,7 +619,6 @@ fn append_to_list() -> Item {
 
 // Positioned on the first cell of the number
 // Cannot be called on cell 0
-// TODO: It outputs a trailing null byte that it shouldn't
 fn display_decimal(width: usize, extra_gap: usize) -> Item {
     let mark = "display start";
     Item::Sequence(vec![
@@ -664,11 +663,17 @@ fn display_decimal(width: usize, extra_gap: usize) -> Item {
         find_non_zero_cell_right(),
         Instruction::Left.into(),
         Instruction::Inc.into(),
+        Instruction::Right.into(),
+        Instruction::Inc.into(),
         Loop::new(vec![
+            Loop::new(vec![
+                zero_cell(),
+                offset_to_insns(width as isize + 1 + extra_gap as isize),
+                Instruction::Output.into(),
+                offset_to_insns(-(width as isize + 1 + extra_gap as isize)),
+            ])
+            .into(),
             Instruction::Right.into(),
-            offset_to_insns(width as isize + 1 + extra_gap as isize),
-            Instruction::Output.into(),
-            offset_to_insns(-(width as isize + 1 + extra_gap as isize)),
             Instruction::Inc.into(),
         ])
         .into(),
@@ -1165,7 +1170,17 @@ fn output() -> anyhow::Result<Item> {
         offset_to_insns(offset_from(Positions::NO_PACKETS + 1, Positions::NO_UDP + 1)),
         zero_cell(),
         offset_to_insns(offset_from(Positions::NO_UDP + 1, Positions::TRANSPORT_BYTES + 1)),
-        write_text(Text::TransportLevelData),
+        Item::Sequence(vec![
+            // This requires _7_ bytes of space, but we only have 6!
+            // So we go in search of some convenient space to use...
+            offset_to_insns(offset_from(Positions::TRANSPORT_BYTES + 1, Positions::LIST_START)),
+            Loop::new(vec![offset_to_insns(ListEntry::WIDTH as _)]).into(),
+            write_text(Text::TransportLevelData),
+            offset_to_insns(-(ListEntry::WIDTH as isize)),
+            Loop::new(vec![offset_to_insns(-(ListEntry::WIDTH as isize))]).into(),
+            Item::assert_position(Positions::LIST_HEADSTOP, "return to headstop"),
+            offset_to_insns(offset_from(Positions::LIST_HEADSTOP, Positions::TRANSPORT_BYTES + 1)),
+        ]),
         Item::assert_position(Positions::TRANSPORT_BYTES + 1, "after first output"),
         offset_to_insns(offset_from(Positions::TRANSPORT_BYTES + 1, Positions::TRANSPORT_BYTES_START)),
         display_decimal(Positions::TRANSPORT_BYTES_WIDTH, 0),
