@@ -34,6 +34,7 @@ Assumptions (non-exclusive):
     Other
         No overflows
         Upon EOF, Input instructions set cell to 0
+        At least one packet
 
  */
 
@@ -324,6 +325,10 @@ impl Positions {
     const LIST_HEADSTOP: usize = Self::PACKET_IP_DEST + 1;
     const SECONDARY_IP_STORED_START: usize = Self::LIST_HEADSTOP + 2;
     const LIST_START: usize = Self::LIST_HEADSTOP + ListEntry::WIDTH;
+
+    const GREATER_FLAG: usize = Self::LIST_HEADSTOP + 1;
+    const GENERAL_COUNT: usize = Self::GREATER_FLAG + 1;
+    const LIST_LOOP_FLAG: usize = Self::GENERAL_COUNT + 1;
 }
 
 fn setup_state() -> Item {
@@ -584,6 +589,13 @@ fn append_to_list() -> Item {
             Loop::new(vec![offset_to_insns(ListEntry::WIDTH as _)]).into(),
             Item::add_marker("new entry"),
             Instruction::Inc.into(),
+            // Yes, using the 0 count to be 1 occurrence *would* work, and would let us
+            // show counts of up to 256 instead of 255, but it makes writing the
+            // maximum finder more complicated (or at least annoying), so we'll just
+            // have to live with it like this.
+            offset_to_insns(offset_from(ListEntry::EXIST_FLAG, ListEntry::COUNT)),
+            Instruction::Inc.into(),
+            offset_to_insns(offset_from(ListEntry::COUNT, ListEntry::EXIST_FLAG)),
             Loop::new(vec![offset_to_insns(-(ListEntry::WIDTH as isize))]).into(),
             copy_over(0),
             copy_over(1),
@@ -944,6 +956,43 @@ fn output() -> anyhow::Result<Item> {
         ])
     }
 
+    fn list_pass(pass_name: &'static str, perform: impl FnOnce(Rc<AtomicBool>) -> Item) -> Item {
+        let brk = Rc::new(AtomicBool::new(false));
+        let brk2 = Rc::clone(&brk);
+        let brk3 = Rc::clone(&brk);
+        let perform = perform(Rc::clone(&brk));
+        let current_marker = "current item";
+        Item::Sequence(vec![
+            Item::assert_position(Positions::LIST_START, pass_name),
+            Item::custom(move |_, _, _| brk2.store(false, Ordering::SeqCst)),
+            Loop::new(vec![
+                Item::add_marker(current_marker),
+                perform,
+                Item::custom(move |tape, position, markers| {
+                    if brk.load(Ordering::SeqCst) {
+                        Item::assert_marker_offset("list end", ListEntry::WIDTH as isize, "break").run(tape, position, markers)
+                    } else {
+                        Item::assert_marker_offset(current_marker, ListEntry::WIDTH as isize, "after perform").run(tape, position, markers)
+                    }
+                }),
+                Item::remove_marker(current_marker),
+            ])
+            .into(),
+            Item::custom(move |tape, position, markers| {
+                if brk3.load(Ordering::SeqCst) {
+                    Item::assert_marker_offset("list end", ListEntry::WIDTH as _, "at list end + one item").run(tape, position, markers)
+                } else {
+                    Item::assert_marker_offset("list end", 0, "at list end").run(tape, position, markers)
+                }
+            }),
+            Instruction::Left.conv::<Item>().repeat(2 * ListEntry::WIDTH),
+            Loop::new(vec![Instruction::Left.conv::<Item>().repeat(ListEntry::WIDTH)]).into(),
+            Item::assert_position(Positions::LIST_HEADSTOP, pass_name),
+            offset_to_insns(offset_from(Positions::LIST_HEADSTOP, Positions::LIST_START)),
+        ])
+        .comment(format!("list pass: {pass_name}"), 180)
+    }
+
     Ok(Item::Sequence(vec![
         Item::assert_position(Positions::PACKET_LOOP_START, "after loop"),
         Item::Comment("begin output".to_owned(), 240),
@@ -1048,6 +1097,199 @@ fn output() -> anyhow::Result<Item> {
         Item::Sequence(vec![zero_cell(), Instruction::Right.into()]).repeat(Positions::LIST_START),
         Item::assert_position(Positions::LIST_START, "division cleanup done"),
         // TODO: output destination IP stats
+        // Reset list items' scratch space, just in case
+        // Also, set MARKED_FLAG to 1 for each one
+        Loop::new(vec![
+            Item::Sequence(vec![Instruction::Right.into(), zero_cell()]).repeat(3),
+            offset_to_insns(offset_from(ListEntry::COUNT - 1, ListEntry::MARKED_FLAG)),
+            Instruction::Inc.into(),
+            offset_to_insns(offset_from(ListEntry::MARKED_FLAG, ListEntry::WIDTH)),
+        ])
+        .into(),
+        Item::add_marker("list end"),
+        Instruction::Left.conv::<Item>().repeat(ListEntry::WIDTH),
+        Loop::new(vec![Instruction::Left.conv::<Item>().repeat(ListEntry::WIDTH)]).into(),
+        Item::assert_position(Positions::LIST_HEADSTOP, "return to headstop"),
+        offset_to_insns(offset_from(Positions::LIST_HEADSTOP, Positions::LIST_LOOP_FLAG)),
+        Instruction::Inc.into(),
+        Loop::new(vec![
+            Item::assert_position(Positions::LIST_LOOP_FLAG, "list loop start"),
+            offset_to_insns(offset_from(Positions::LIST_LOOP_FLAG, Positions::LIST_START)),
+            // Yes, some/most/all of these passes *could* be collapsed into one
+            // Given that this is more understandable: no, they will be kept separate
+            list_pass("zero check", |_| {
+                // Set `scratch1` to `count`==0
+                Item::Sequence(vec![
+                    offset_to_insns(offset_from(ListEntry::EXIST_FLAG, ListEntry::COUNT)),
+                    Instruction::Left.into(),
+                    Instruction::Left.into(),
+                    Instruction::Inc.into(),
+                    Instruction::Right.into(),
+                    Instruction::Right.into(),
+                    Loop::new(vec![
+                        Instruction::Dec.into(),
+                        Instruction::Left.into(),
+                        Instruction::Inc.into(),
+                        Instruction::Left.into(),
+                        zero_cell(),
+                        Instruction::Right.into(),
+                        Instruction::Right.into(),
+                    ])
+                    .into(),
+                    Instruction::Left.into(),
+                    drain(&[1], true),
+                    Instruction::Right.into(),
+                    offset_to_insns(offset_from(ListEntry::COUNT, ListEntry::WIDTH)),
+                ])
+            }),
+            list_pass("find greater items", |_| {
+                Item::Sequence(vec![
+                    Instruction::Right.into(),
+                    Instruction::Right.into(),
+                    Instruction::Right.into(),
+                    Instruction::Inc.into(),
+                    Instruction::Left.into(),
+                    Loop::new(vec![
+                        zero_cell(),
+                        Instruction::Right.into(),
+                        Instruction::Dec.into(),
+                        Instruction::Left.into(),
+                    ])
+                    .into(),
+                    Instruction::Right.into(),
+                    // On scratch1 i.e. 1 iff count!=0 else 0
+                    Instruction::Left.into(),
+                    Instruction::Left.into(),
+                    Instruction::Left.into(),
+                    zero_cell(),
+                    Instruction::Right.into(),
+                    Loop::new(vec![
+                        Instruction::Dec.into(),
+                        Instruction::Left.into(),
+                        Instruction::Inc.into(),
+                        Instruction::Right.into(),
+                        Instruction::Right.into(),
+                        Instruction::Right.into(),
+                        Instruction::Inc.into(),
+                        Instruction::Left.into(),
+                        Instruction::Left.into(),
+                    ])
+                    .into(),
+                    Instruction::Left.into(),
+                    Item::assert_marker_offset("current item", 0, "return to exist"),
+                    drain(&[1], true),
+                    Instruction::Inc.into(),
+                    Instruction::Right.into(),
+                    Instruction::Right.into(),
+                    Instruction::Right.into(),
+                    Instruction::Dec.into(),
+                    Instruction::Dec.into(),
+                    // If 0, mark
+                    Instruction::Left.into(),
+                    Instruction::Inc.into(),
+                    Instruction::Right.into(),
+                    Loop::new(vec![
+                        zero_cell_up(),
+                        Instruction::Left.into(),
+                        Instruction::Dec.into(),
+                        Instruction::Right.into(),
+                    ])
+                    .into(),
+                    offset_to_insns(offset_from(ListEntry::SCRATCH + 1, ListEntry::WIDTH)),
+                ])
+            }),
+            list_pass("check for any greater items", |brk| {
+                Item::Sequence(vec![
+                    Instruction::Right.into(),
+                    Instruction::Right.into(),
+                    Loop::new(vec![
+                        drain(&[1], true),
+                        Instruction::Left.into(),
+                        Instruction::Left.into(),
+                        Item::assert_marker_offset("current item", ListEntry::EXIST_FLAG as _, "exist flag"),
+                        Loop::new(vec![Instruction::Left.conv::<Item>().repeat(ListEntry::WIDTH)]).into(),
+                        Item::custom(move |_, _, _| brk.store(true, Ordering::SeqCst)),
+                        Item::assert_position(Positions::LIST_HEADSTOP, "return to headstop"),
+                        offset_to_insns(offset_from(Positions::LIST_HEADSTOP, Positions::GREATER_FLAG)),
+                        zero_cell(),
+                        Instruction::Inc.into(),
+                        offset_to_insns(offset_from(Positions::GREATER_FLAG, Positions::LIST_START)),
+                        Loop::new(vec![Instruction::Right.conv::<Item>().repeat(ListEntry::WIDTH)]).into(),
+                        Instruction::Right.conv::<Item>().repeat(ListEntry::WIDTH),
+                        offset_to_insns(offset_from(ListEntry::WIDTH, 2)),
+                    ])
+                    .into(),
+                    offset_to_insns(offset_from(2, ListEntry::WIDTH)),
+                ])
+            }),
+            list_pass("restore greater markers", |_| {
+                Item::Sequence(vec![
+                    Instruction::Right.into(),
+                    Instruction::Right.into(),
+                    Instruction::Right.into(),
+                    drain(&[-1], true),
+                    offset_to_insns(offset_from(3, ListEntry::WIDTH)),
+                ])
+            }),
+            offset_to_insns(offset_from(Positions::LIST_START, Positions::LIST_LOOP_FLAG)),
+            zero_cell(),
+            offset_to_insns(offset_from(Positions::LIST_LOOP_FLAG, Positions::GREATER_FLAG)),
+            // If 1, loop continues
+            Loop::new(vec![
+                Item::assert_position(Positions::GREATER_FLAG, "if greater exists"),
+                zero_cell(),
+                offset_to_insns(offset_from(Positions::GREATER_FLAG, Positions::LIST_LOOP_FLAG)),
+                Instruction::Inc.into(),
+                offset_to_insns(offset_from(Positions::LIST_LOOP_FLAG, Positions::GENERAL_COUNT)),
+                Instruction::Inc.into(),
+                offset_to_insns(offset_from(Positions::GENERAL_COUNT, Positions::LIST_START)),
+                list_pass("decrement", |_| {
+                    Item::Sequence(vec![
+                        offset_to_insns(offset_from(ListEntry::EXIST_FLAG, ListEntry::SCRATCH)),
+                        zero_cell(),
+                        offset_to_insns(offset_from(ListEntry::SCRATCH, ListEntry::COUNT)),
+                        // if zero, clear mark
+                        // else, decrement
+                        Instruction::Left.into(),
+                        Instruction::Inc.into(),
+                        Instruction::Right.into(),
+                        Loop::new(vec![
+                            drain(&[-2], true),
+                            Instruction::Left.into(),
+                            Instruction::Left.into(),
+                            Instruction::Dec.into(),
+                            Instruction::Right.into(),
+                            Instruction::Dec.into(),
+                            Instruction::Right.into(),
+                        ])
+                        .into(),
+                        Instruction::Left.into(),
+                        Instruction::Left.into(),
+                        drain(&[2], true),
+                        Instruction::Right.into(),
+                        // [if 1: above if zero]
+                        Loop::new(vec![
+                            zero_cell(),
+                            offset_to_insns(offset_from(ListEntry::COUNT - 1, ListEntry::MARKED_FLAG)),
+                            zero_cell(),
+                            offset_to_insns(offset_from(ListEntry::MARKED_FLAG, ListEntry::COUNT - 1)),
+                        ])
+                        .into(),
+                        offset_to_insns(offset_from(ListEntry::COUNT - 1, ListEntry::WIDTH)),
+                    ])
+                }),
+                offset_to_insns(offset_from(Positions::LIST_START, Positions::GREATER_FLAG)),
+            ])
+            .into(),
+            Item::assert_position(Positions::GREATER_FLAG, "after loop check"),
+            offset_to_insns(offset_from(Positions::GREATER_FLAG, Positions::LIST_LOOP_FLAG)),
+        ])
+        .indent()
+        .into(),
+        Item::assert_position(Positions::LIST_LOOP_FLAG, "after loop"),
+        // At this point, entries are flagged iff they are maximal-count
+        // `Positions::GENERAL_COUNT` contains the maximum count
+        // TODO: Output
     ]))
 }
 
