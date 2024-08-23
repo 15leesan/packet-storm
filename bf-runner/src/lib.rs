@@ -6,7 +6,7 @@ use std::{
     panic::Location,
 };
 
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 
 use crate::build::InterpreterAction;
 
@@ -33,6 +33,46 @@ impl Interpreter {
             printing_level: None,
             markers: Default::default(),
         }
+    }
+
+    pub fn parse_tape(&mut self, tape: &str) -> anyhow::Result<()> {
+        let mut s = tape.trim_end();
+        if !s.starts_with('[') {
+            bail!("bad start")
+        }
+        s = &s[1..];
+        let mut position = None;
+        let mut tape = Vec::with_capacity(tape.len() / 4 + 2);
+        let mut i = 0;
+        loop {
+            if s.is_empty() {
+                bail!("no end")
+            }
+            if s == "]" {
+                break;
+            }
+            if s.len() >= 6 && s.as_bytes()[1] == b'[' && s.as_bytes()[5] == b']' {
+                let current = &s[2..5];
+                tape.push(current.trim_start().parse().context(format!("invalid cell: {current:?}"))?);
+                if position.is_some() {
+                    bail!("multiple pointers")
+                }
+                position = Some(i);
+                s = &s[6..];
+            }
+            if s.len() < 4 {
+                println!("{s:?}");
+                bail!("not enough data")
+            }
+            let current = &s[..4];
+            s = &s[4..];
+            tape.push(current.trim_start().parse().context(format!("invalid cell: {current:?}"))?);
+            i += 1;
+        }
+        let Some(position) = position else { bail!("no pointer set") };
+        self.tape_pointer = position;
+        self.tape = tape;
+        Ok(())
     }
 
     pub fn set_print_level(&mut self, level: u8) {
