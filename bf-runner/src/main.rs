@@ -1185,6 +1185,7 @@ fn output() -> anyhow::Result<Item> {
         offset_to_insns(offset_from(Positions::TRANSPORT_BYTES + 1, Positions::TRANSPORT_BYTES_START)),
         display_decimal(Positions::TRANSPORT_BYTES_WIDTH, 0),
         write_text(Text::BytesNewline),
+        Item::assert_position(Positions::TRANSPORT_BYTES_START, "still here"),
         offset_to_insns(offset_from(Positions::TRANSPORT_BYTES_START, Positions::NO_UDP_START)),
         display_decimal(Positions::NO_UDP_WIDTH, 0),
         write_text(Text::UDP),
@@ -1209,12 +1210,40 @@ fn output() -> anyhow::Result<Item> {
             .conv::<Item>()
             .comment("subtraction level", 140),
             offset_to_insns(-1 - Positions::NO_PACKETS_WIDTH as isize),
+            Item::Sequence(vec![
+                // The cell to the right of the subtraction cell needs to be zero, so we have to move
+                // the lower-value digits out of the way
+                Item::add_marker("return here"),
+                offset_to_insns(-1 - Positions::NO_PACKETS_WIDTH as isize),
+                offset_to_insns(2 * Positions::NO_PACKETS_WIDTH as isize + 3),
+                Item::custom(|tape, position, markers| {
+                    static FIRST_TIME: AtomicBool = AtomicBool::new(true);
+                    if FIRST_TIME.swap(false, Ordering::SeqCst) {
+                        Item::add_marker("stored").run(tape, position, markers)
+                    }
+                }),
+                offset_to_insns(-(2 * Positions::NO_PACKETS_WIDTH as isize + 3)),
+                drain(&[2 * Positions::NO_PACKETS_WIDTH as isize + 3], true),
+                offset_to_insns(1 + Positions::NO_PACKETS_WIDTH as isize),
+                Item::assert_marker_offset("return here", 0, "returned"),
+                Item::remove_marker("return here"),
+            ]),
             Instruction::Left.into(),
         ])
         .indent()
         .conv::<Item>()
         .comment("subtract UDP from total packets", 200),
-        offset_to_insns(-7),
+        Item::Sequence(vec![
+            offset_to_insns(10),
+            Item::assert_marker_offset("stored", -6, "move TCP"),
+            Item::Sequence(vec![
+                drain(&[-(2 * Positions::NO_PACKETS_WIDTH as isize + 3)], true),
+                Instruction::Right.into(),
+            ])
+            .repeat(Positions::NO_PACKETS_WIDTH),
+            Item::assert_marker_offset("stored", 1, "after move TCP"),
+            offset_to_insns(-24),
+        ]),
         Item::assert_position(11, "TCP packets"),
         display_decimal(Positions::NO_PACKETS_WIDTH, 0),
         write_text(Text::TCPNewline),
@@ -1624,6 +1653,7 @@ fn main() -> anyhow::Result<()> {
 
     let program = Program::build(program.clone().build())?;
     println!("{}", program.as_text());
+    fs_err::write("program.bf", program.as_text_clean())?;
     let data = fs_err::read("test.pcap")?;
     let input = Cursor::new(data[..1781].to_owned()); // Header + first 13 packets
 
