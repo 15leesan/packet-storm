@@ -24,3 +24,9 @@ is included in `src/`.
 
 Check out [bf-runner/README.md](bf-runner/README.md) for an explanation of
 `program.bf`, an implementation of this in [brainfuck](https://en.wikipedia.org/wiki/Brainfuck).
+
+## GitHub
+
+Note that I have developed this pushing solely to my own self-hosted git server
+and have only recently mirrored it over to GitHub - as a result, some repo statistics
+may be inaccurate.
