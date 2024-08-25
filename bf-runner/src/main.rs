@@ -35,6 +35,7 @@ Assumptions (non-exclusive):
         No overflows
         Upon EOF, Input instructions set cell to 0
         At least one packet
+        At least one each of UDP and TCP
 
  */
 
@@ -569,7 +570,7 @@ fn append_to_list() -> Item {
             Positions::SECONDARY_IP_STORED_START + 3,
             Positions::LIST_HEADSTOP + 2,
         )),
-        zero_cell(), // TODO: I *think* this is already zeroed?
+        zero_cell(),
         Instruction::Inc.into(),
         Instruction::Left.into(),
         Loop::new(vec![
@@ -614,8 +615,6 @@ fn append_to_list() -> Item {
         Item::assert_position(Positions::LIST_HEADSTOP + 2, "mark not found"),
     ])
 }
-
-// TEMP: move into `output()`
 
 // Positioned on the first cell of the number
 // Cannot be called on cell 0
@@ -701,12 +700,6 @@ fn display_decimal(width: usize, extra_gap: usize) -> Item {
                 Instruction::Left.conv::<Item>().repeat(width),
             ])
             .into(),
-            // Item::Sequence(vec![
-            //     Instruction::Right.into(),
-            //     Instruction::Inc.into(),
-            //     Instruction::Left.into(),
-            // ])
-            // .comment("TEMP: only for vis", 250),
             Instruction::Left.conv::<Item>().repeat(2 * width + extra_gap),
         ])
         .comment("decimal cleanup", 120),
@@ -716,7 +709,7 @@ fn display_decimal(width: usize, extra_gap: usize) -> Item {
     .comment(format!("display decimal {{width={width}}}"), 180)
 }
 
-fn output() -> anyhow::Result<Item> {
+fn output() -> Item {
     #[derive(Debug)]
     enum Text {
         TransportLevelData,
@@ -733,6 +726,7 @@ fn output() -> anyhow::Result<Item> {
         Packet,
         Each,
         Newline,
+        AverageOf,
     }
 
     fn write_text(text: Text) -> Item {
@@ -742,12 +736,12 @@ fn output() -> anyhow::Result<Item> {
             Text::TransportLevelData => {
                 vec![
                     Item::parse(
-                        "++++++++[>+++++++++++>++++++++++++++>++++++++++++>++++>++++++>+++++++<<<<<<-]\
-        >----.>-.+++++.>+.<--------.>>.<<++++++++.--.>.<----.+++++.---.-.+++.++.>>>---.<<<--------.\
-        >++++.<++++++++++.>.+++++++.>.<--------.---.<--.>.>>>++.<<.",
+                        "+++++++++[>+++++++++>++++++++++++>+++++++++++>++++>++++++++>+++++>++++++\
+                        <<<<<<<-]>+++.>+++.+++++.>--.<--------.>>----.>+.+++++++.>.<<<<.>++++.<+++++\
+                        +++++.>.+++++++.>.<--------.---.<--.>.>>>>++++.<<<.",
                     )
                     .expect("should be valid")
-                    .comment("write \"Total transport-level data: \"", 220),
+                    .comment("write \"Total IP-level data: \"", 220),
                     Item::assert_marker_offset(marker.clone(), 4, "after text write"),
                     Instruction::Right.conv::<Item>().repeat(2),
                     Loop::new(vec![zero_cell(), Instruction::Left.into()]).into(),
@@ -882,6 +876,18 @@ fn output() -> anyhow::Result<Item> {
                 vec![
                     Item::parse("+++[>+++<-]>+.").expect("should be valid").comment("write \"\\n\"", 220),
                     Item::assert_marker_offset(marker.clone(), 1, "after text write"),
+                    Loop::new(vec![zero_cell(), Instruction::Left.into()]).into(),
+                ]
+            }
+            Text::AverageOf => {
+                vec![
+                    Item::parse(
+                        "+++++++++[>+++++++>+++++++++++++>+++++++++++>++++<<<<-]>++.>+.>+\
+                    +.<----.>----.++++++.--.>----.<<---.>+.>.",
+                    )
+                    .expect("should be valid")
+                    .comment("write \"Average of \"", 220),
+                    Item::assert_marker_offset(marker.clone(), 4, "after text write"),
                     Loop::new(vec![zero_cell(), Instruction::Left.into()]).into(),
                 ]
             }
@@ -1138,7 +1144,7 @@ fn output() -> anyhow::Result<Item> {
         ])
     }
 
-    Ok(Item::Sequence(vec![
+    Item::Sequence(vec![
         Item::assert_position(Positions::PACKET_LOOP_START, "after loop"),
         Item::Comment("begin output".to_owned(), 240),
         offset_to_insns(offset_from(Positions::PACKET_LOOP_START, Positions::SCRATCH_SPACE - 1)),
@@ -1251,7 +1257,7 @@ fn output() -> anyhow::Result<Item> {
         offset_to_insns(14),
         Item::Sequence(vec![Instruction::Right.into(), zero_cell()]).repeat(Positions::NO_PACKETS_WIDTH),
         Item::assert_position(32, "after clear subtraction"),
-        // TODO: Write text on line before division
+        write_text(Text::AverageOf),
         // Prepare division
         offset_to_insns(offset_from(32, 6)),
         Item::Sequence(vec![Instruction::Right.into(), zero_cell()]).repeat(48 - 7 - 9),
@@ -1280,7 +1286,6 @@ fn output() -> anyhow::Result<Item> {
         // I'm not going to spend time figuring out which specific cells need zeroing.
         Item::Sequence(vec![zero_cell(), Instruction::Right.into()]).repeat(Positions::LIST_START),
         Item::assert_position(Positions::LIST_START, "division cleanup done"),
-        // TODO: output destination IP stats
         // Reset list items' scratch space, just in case
         // Also, set MARKED_FLAG to 1 for each one
         Loop::new(vec![
@@ -1535,11 +1540,6 @@ fn output() -> anyhow::Result<Item> {
          */
         Instruction::Inc.into(),
         Instruction::Right.into(),
-        // TEMP: pretend there are more destinations
-        Instruction::Inc.into(),
-        Instruction::Inc.into(),
-        Instruction::Inc.into(),
-        //
         Instruction::Dec.into(),
         // If nonzero, `cell` extra destinations
         Loop::new(vec![
@@ -1639,7 +1639,7 @@ fn output() -> anyhow::Result<Item> {
         offset_to_insns(offset_from(Positions::GENERAL_COUNT, Positions::TEXT_SPACE - 1)),
         Loop::new(vec![zero_cell(), write_text(Text::Each)]).into(),
         write_text(Text::Newline),
-    ]))
+    ])
 }
 
 fn main() -> anyhow::Result<()> {
@@ -1648,20 +1648,33 @@ fn main() -> anyhow::Result<()> {
         setup_state(),
         Item::assert_position(Positions::PACKET_LOOP_START, "start"),
         read_packet_loop(),
-        output()?,
+        output(),
     ];
 
     let program = Program::build(program.clone().build())?;
-    println!("{}", program.as_text());
-    fs_err::write("program.bf", program.as_text_clean())?;
-    let data = fs_err::read("test.pcap")?;
-    let input = Cursor::new(data[..1781].to_owned()); // Header + first 13 packets
+    // println!("{}", program.as_text());
+    fs_err::write("program.bf", collapse(program.as_text_clean()))?;
+    let data = fs_err::read("packet-storm.pcap")?;
+    let input = Cursor::new(data);
 
     let mut interpreter = Interpreter::new(program, input);
     interpreter.set_print_level(160);
     interpreter.run()?;
     // println!("\n\n===\n");
-    println!("{}", interpreter.tape());
+    // println!("{}", interpreter.tape());
 
     Ok(())
+}
+
+fn collapse(mut bf: String) -> String {
+    loop {
+        let mut new = bf.clone();
+        for pair in ["+-", "-+", "<>", "><"] {
+            new = new.replace(pair, "");
+        }
+        if new.len() == bf.len() {
+            return new;
+        }
+        bf = new;
+    }
 }

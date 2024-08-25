@@ -34,21 +34,43 @@ fn main() -> anyhow::Result<()> {
     let taken = start.elapsed();
     println!("Took {taken:?}");
 
-    println!("Total transport-level data: {} bytes", total_transport_level_data);
+    println!("Total IP-level data: {} bytes", total_transport_level_data);
     println!("{} UDP, {} TCP", udp, no_packets - udp);
     println!(
-        "Average transport-level bytes per packet: {:.2}",
+        "Average of {:.2} bytes/packet",
         (total_transport_level_data as f64) / (no_packets as f64)
     );
     let mut ips = dest_ips.into_iter().collect::<Vec<_>>();
     ips.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
-    // println!(
-    //     "Destination IPs by frequency: {}",
-    //     ips.iter().fold(String::new(), |mut acc, (ip, n)| {
-    //         let _ = writeln!(acc, "{ip:15} - {n}");
-    //         acc
-    //     })
-    // );
+    let (most_popular, taken) = ips
+        .iter()
+        .scan((None, 0), |(prev, count), it| {
+            // Selects the first three most popular tiers of destinations, i.e. all 16 counts,
+            // all 15s, all 14s.
+            if let Some(prev) = prev {
+                if *prev != it.1 {
+                    *count += 1;
+                    *prev = it.1;
+                }
+                if *count >= 3 {
+                    None
+                } else {
+                    Some(it)
+                }
+            } else {
+                *prev = Some(it.1);
+                Some(it)
+            }
+        })
+        .fold((String::new(), 0_usize), |(mut acc, taken), (ip, n)| {
+            use std::fmt::Write as _;
+            let _ = writeln!(acc, "{ip:15} - {n}");
+            (acc, taken + 1)
+        });
+    println!(
+        "Destination IPs by frequency:\n{most_popular}...and {} more entries",
+        ips.len() - taken
+    );
 
     Ok(())
 }
